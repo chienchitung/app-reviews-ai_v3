@@ -174,6 +174,13 @@ export default function AnalysisPage() {
     setUploadStatus('uploading');
     setErrorMessage('');
 
+    // 添加 AI 模型分析提示
+    const aiModelMessage = language === 'zh' 
+      ? '正在使用 AI 模型進行評論情感和分類分析，這可能需要一些時間...' 
+      : 'Using AI models for sentiment and category analysis, this may take some time...';
+    
+    alert(aiModelMessage);
+
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -213,6 +220,13 @@ export default function AnalysisPage() {
       setOriginalData(result.data);
       setAnalysisResult(result.data);
       setUploadStatus('success');
+
+      // 添加 AI 分析完成提示
+      const aiCompleteMessage = language === 'zh' 
+        ? 'AI 模型分析完成！評論已被自動分類並標記情感。' 
+        : 'AI model analysis completed! Reviews have been automatically categorized and sentiment-tagged.';
+      
+      alert(aiCompleteMessage);
     } catch (error: any) {
       console.error('分析過程出錯:', error);
       setUploadStatus('error');

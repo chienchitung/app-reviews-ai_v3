@@ -4,6 +4,104 @@ import * as XLSX from 'xlsx';
 const { parse } = require('csv-parse/sync');
 import type { AnalysisResult } from '@/types/feedback';
 import { v4 as uuidv4 } from 'uuid';
+import axios from 'axios';
+
+// Hugging Face API 端點
+const SENTIMENT_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-sentiment-finetuned";
+const CATEGORY_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-multi-classification";
+
+// Hugging Face API 密鑰
+const HF_API_KEY = process.env.HUGGING_FACE_API_KEY || "";
+
+// 延遲函數
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 帶重試機制的 API 調用函數
+async function callHuggingFaceAPI(url: string, text: string, maxRetries: number = 3): Promise<any> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await axios.post(
+        url,
+        { inputs: text },
+        {
+          headers: {
+            "Authorization": `Bearer ${HF_API_KEY}`,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+      return response.data;
+    } catch (error: any) {
+      if (error.response?.status === 503 && error.response?.data?.error?.includes('loading')) {
+        console.log(`模型正在加載中，等待後重試... (第 ${i + 1} 次)`);
+        await delay(20000); // 等待 20 秒
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('超過最大重試次數');
+}
+
+// 情感分析函數
+async function analyzeSentiment(text: string): Promise<string> {
+  try {
+    const result = await callHuggingFaceAPI(SENTIMENT_MODEL_API, text);
+    console.log("情感分析原始結果:", JSON.stringify(result, null, 2));
+    
+    if (Array.isArray(result) && result.length > 0) {
+      console.log("情感分析第一層結果:", JSON.stringify(result[0], null, 2));
+      
+      // 找出最高分數的情感
+      const highestScore = result[0].reduce((prev: any, current: any) => {
+        console.log("比較情感分數:", { prev, current });
+        return (prev.score > current.score) ? prev : current;
+      });
+      
+      console.log("選中的最高分數情感:", highestScore);
+
+      // 直接使用中文標籤
+      const validLabels = ["正面", "中性", "負面"];
+      if (validLabels.includes(highestScore.label)) {
+        return highestScore.label;
+      }
+      
+      console.log("未知的情感標籤:", highestScore.label);
+      return "未標記";
+    }
+    console.log("情感分析結果格式不符合預期:", result);
+    return "未標記"; // 默認情感
+  } catch (error) {
+    console.error("情感分析錯誤:", error);
+    return "未標記"; // 出錯時返回未標記
+  }
+}
+
+// 分類分析函數
+async function analyzeCategory(text: string): Promise<string[]> {
+  try {
+    const result = await callHuggingFaceAPI(CATEGORY_MODEL_API, text);
+    console.log("分類分析原始結果:", JSON.stringify(result, null, 2));
+    
+    if (Array.isArray(result) && result.length > 0) {
+      console.log("分類分析第一層結果:", JSON.stringify(result[0], null, 2));
+      
+      // 找出最高分數的分類
+      const highestScore = result[0].reduce((prev: any, current: any) => {
+        console.log(`比較分類分數: ${prev.label}(${prev.score}) vs ${current.label}(${current.score})`);
+        return (prev.score > current.score) ? prev : current;
+      });
+      
+      console.log("選中的最高分數分類:", highestScore);
+      return [highestScore.label];
+    }
+    console.log("分類分析結果格式不符合預期:", result);
+    return ["未標記"]; // 默認分類
+  } catch (error) {
+    console.error("分類分析錯誤:", error);
+    return ["未標記"]; // 出錯時返回未標記
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -189,7 +287,8 @@ export async function POST(request: NextRequest) {
       }
 
       // 標準化欄位名稱
-      const normalizedData = data.map((row, index) => {
+      // 使用 Promise.all 處理所有行的異步操作
+      const normalizedDataPromises = data.map(async (row, index) => {
         // 如果是第一行，打印欄位名稱以便調試
         if (index === 0) {
           console.log('檔案欄位:', Object.keys(row));
@@ -254,12 +353,88 @@ export async function POST(request: NextRequest) {
         const deviceTerms = ['裝置', 'device', 'platform', '平台', '系統'];
         const device = findColumn(deviceTerms) || '未知';
 
-        // 分類處理
-        const categoryTerms = ['分類', 'category', 'type', '類型'];
-        const categoryValue = findColumn(categoryTerms);
-        const categories = categoryValue 
-          ? categoryValue.split(/[,，]/).map((c: string) => c.trim()).filter(Boolean)
-          : ['一般'];
+        // 使用 Hugging Face 模型進行情感分析
+        let sentiment = '中性';
+        // 使用 Hugging Face 模型進行分類分析
+        let categories = ['一般'];
+
+        // 只有當內容存在且不為空時才進行分析
+        if (content && content.trim()) {
+          try {
+            // 嘗試使用 AI 模型進行分析
+            if (HF_API_KEY && HF_API_KEY.length > 10) {
+              try {
+                // 並行調用兩個模型以提高效率
+                const [sentimentResult, categoryResult] = await Promise.all([
+                  analyzeSentiment(content),
+                  analyzeCategory(content)
+                ]);
+                
+                sentiment = sentimentResult;
+                categories = categoryResult;
+                console.log("AI 模型分析成功:", { sentiment, categories });
+              } catch (aiError) {
+                console.error("AI 模型分析失敗，使用默認值:", aiError);
+                // 使用默認值
+                sentiment = '中性';
+                categories = ['一般'];
+              }
+            } else {
+              console.log("未提供有效的 API 密鑰，使用默認值");
+              // 使用默認值
+              sentiment = '中性';
+              categories = ['一般'];
+            }
+            
+            // 確保最終的標籤是有效的
+            if (!sentiment || sentiment.trim() === '') {
+              sentiment = '中性';
+            }
+            
+            if (!categories || categories.length === 0 || (categories.length === 1 && categories[0].trim() === '')) {
+              categories = ['一般'];
+            }
+            
+            // 記錄最終使用的標籤
+            console.log("最終使用的標籤:", { sentiment, categories });
+            
+          } catch (error) {
+            console.error('分析錯誤:', error);
+            // 使用傳統方法作為備用
+            const sentimentTerms = ['情感', 'sentiment', '情緒'];
+            const sentimentValue = findColumn(sentimentTerms);
+            if (sentimentValue) sentiment = sentimentValue;
+
+            const categoryTerms = ['分類', 'category', 'type', '類型'];
+            const categoryValue = findColumn(categoryTerms);
+            if (categoryValue) {
+              categories = categoryValue.split(/[,，]/).map((c: string) => c.trim()).filter(Boolean);
+            }
+            
+            // 確保最終的標籤是有效的
+            if (!sentiment || sentiment.trim() === '') {
+              sentiment = '中性';
+            }
+            
+            if (!categories || categories.length === 0 || (categories.length === 1 && categories[0].trim() === '')) {
+              categories = ['一般'];
+            }
+            
+            console.log("使用傳統方法的標籤:", { sentiment, categories });
+          }
+        } else {
+          // 如果沒有內容，使用傳統方法
+          const sentimentTerms = ['情感', 'sentiment', '情緒'];
+          sentiment = findColumn(sentimentTerms) || '中性';
+
+          const categoryTerms = ['分類', 'category', 'type', '類型'];
+          const categoryValue = findColumn(categoryTerms);
+          categories = categoryValue 
+            ? categoryValue.split(/[,，]/).map((c: string) => c.trim()).filter(Boolean)
+            : ['一般'];
+            
+          console.log("無內容，使用傳統方法的標籤:", { sentiment, categories });
+        }
 
         // 關鍵詞處理
         const keywordTerms = ['關鍵詞', 'keywords', 'tags', '標籤', '關鍵字'];
@@ -267,10 +442,6 @@ export async function POST(request: NextRequest) {
         const keywords = keywordsValue 
           ? keywordsValue.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean)
           : [];
-
-        // 情感處理
-        const sentimentTerms = ['情感', 'sentiment', '情緒'];
-        const sentiment = findColumn(sentimentTerms) || '中性';
 
         return {
           id: `review-${index}`,
@@ -284,6 +455,9 @@ export async function POST(request: NextRequest) {
           keywords: keywords
         };
       });
+
+      // 等待所有行的處理完成
+      const normalizedData = await Promise.all(normalizedDataPromises);
 
       // 計算關鍵詞出現頻率
       const keywordCounts = normalizedData.reduce((acc, row) => {
@@ -346,4 +520,4 @@ function calculateAverageRating(feedbacks: any[]): number {
 // 計算情感比例
 function calculateSentimentRatio(feedbacks: any[], sentiment: string): number {
   return feedbacks.filter(row => row.sentiment.includes(sentiment)).length / feedbacks.length;
-} 
+}
