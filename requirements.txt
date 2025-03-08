@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+google-play-scraper
+python-dotenv
+pydantic
+emoji
+pytz
+requests
+beautifulsoup4
+langdetect 

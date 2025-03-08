@@ -1,0 +1,58 @@
+sequence-diagram
+
+title User Review Analysis Platform
+
+// Define actors with icons and colors
+User [icon: user, color: blue]
+Frontend [icon: monitor, color: green]
+Backend [icon: server, color: orange]
+AppStore [icon: apple, color: black]
+PlayStore [icon: android, color: green]
+Database [icon: database, color: purple]
+AnalysisService [icon: tool, color: red]
+
+// User initiates review analysis
+User > Frontend: Request review analysis
+activate User
+Frontend > Backend: Fetch reviews
+activate Frontend
+
+// Backend fetches reviews from multiple platforms
+par [label: Fetch reviews from platforms] {
+  Backend > AppStore: Fetch iOS reviews
+  AppStore --> Backend: Return iOS reviews
+  and
+  Backend > PlayStore: Fetch Android reviews
+  PlayStore --> Backend: Return Android reviews
+}
+
+// Process and store reviews
+Backend > Database: Store raw reviews
+Backend > AnalysisService: Process reviews
+activate Backend
+
+// Analyze reviews
+loop [label: For each review] {
+  AnalysisService > AnalysisService: Sentiment analysis
+  AnalysisService > AnalysisService: Keyword extraction
+}
+
+// Conditional analysis based on membership
+alt [label: Membership type] {
+  opt [label: Basic (Free)] {
+    AnalysisService > Frontend: Basic analysis results
+  }
+  else [label: Professional (Paid)] {
+    AnalysisService > Frontend: Advanced analysis results
+  }
+  else [label: Enterprise (Custom)] {
+    AnalysisService > Frontend: Custom analysis results
+  }
+}
+
+// Frontend displays results to user
+Frontend > User: Display analysis results
+deactivate Frontend
+deactivate User
+deactivate Backend
+
