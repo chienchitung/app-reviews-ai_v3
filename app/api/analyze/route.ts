@@ -6,6 +6,53 @@ import type { AnalysisResult } from '@/types/feedback';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 
+// 請求佇列類別
+class RequestQueue {
+  private queue: Array<() => Promise<any>> = [];
+  private processing = false;
+  private concurrentLimit = 2; // 限制並發請求數
+  private activeRequests = 0;
+
+  async add<T>(request: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await request();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.processQueue();
+    });
+  }
+
+  private async processQueue() {
+    if (this.processing || this.activeRequests >= this.concurrentLimit) return;
+    this.processing = true;
+
+    while (this.queue.length > 0 && this.activeRequests < this.concurrentLimit) {
+      const request = this.queue.shift();
+      if (request) {
+        this.activeRequests++;
+        try {
+          await request();
+        } finally {
+          this.activeRequests--;
+        }
+      }
+    }
+
+    this.processing = false;
+    if (this.queue.length > 0) {
+      this.processQueue();
+    }
+  }
+}
+
+// 創建請求佇列實例
+const requestQueue = new RequestQueue();
+
 // Hugging Face API 端點
 const SENTIMENT_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-sentiment-finetuned";
 const CATEGORY_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-multi-classification";
@@ -20,21 +67,27 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function callHuggingFaceAPI(url: string, text: string, maxRetries: number = 3): Promise<any> {
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const response = await axios.post(
-        url,
-        { inputs: text },
-        {
-          headers: {
-            "Authorization": `Bearer ${HF_API_KEY}`,
-            "Content-Type": "application/json"
+      // 使用請求佇列來控制並發
+      return await requestQueue.add(async () => {
+        const response = await axios.post(
+          url,
+          { inputs: text },
+          {
+            headers: {
+              "Authorization": `Bearer ${HF_API_KEY}`,
+              "Content-Type": "application/json"
+            }
           }
-        }
-      );
-      return response.data;
+        );
+        return response.data;
+      });
     } catch (error: any) {
-      if (error.response?.status === 503 && error.response?.data?.error?.includes('loading')) {
-        console.log(`模型正在加載中，等待後重試... (第 ${i + 1} 次)`);
-        await delay(20000); // 等待 20 秒
+      if (error.response?.status === 503) {
+        console.log(`模型服務暫時不可用，等待後重試... (第 ${i + 1} 次)`);
+        // 使用指數退避策略，基礎等待時間為 2 秒，最多等待 30 秒
+        const waitTime = Math.min(2000 * Math.pow(2, i), 30000);
+        console.log(`等待 ${waitTime/1000} 秒後重試...`);
+        await delay(waitTime);
         continue;
       }
       throw error;
@@ -103,408 +156,459 @@ async function analyzeCategory(text: string): Promise<string[]> {
   }
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File;
-
-    if (!file) {
-      return NextResponse.json(
-        { error: '未找到文件' },
-        { status: 400 }
-      );
+// 批次處理函數
+async function processBatch<T>(
+  items: string[],
+  processor: (item: string) => Promise<T>,
+  batchSize: number = 5
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    console.log(`處理批次 ${i/batchSize + 1}/${Math.ceil(items.length/batchSize)}, 大小: ${batch.length}`);
+    
+    const batchPromises = batch.map(item => processor(item));
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+    
+    // 批次之間添加延遲，避免過度請求
+    if (i + batchSize < items.length) {
+      await delay(1000);
     }
+  }
+  return results;
+}
 
-    const buffer = await file.arrayBuffer();
-    let data: any[] = [];
+export async function POST(request: NextRequest) {
+  const encoder = new TextEncoder();
+  const stream = new TransformStream();
+  const writer = stream.writable.getWriter();
 
+  const sendMessage = async (message: any) => {
+    await writer.write(
+      encoder.encode(JSON.stringify(message) + '\n')
+    );
+  };
+
+  const updateProgress = async (percentage: number, step: string) => {
+    await sendMessage({
+      type: 'progress',
+      data: {
+        percentage,
+        step
+      }
+    });
+  };
+
+  const sendResult = async (result: any) => {
+    await sendMessage({
+      type: 'result',
+      data: result
+    });
+  };
+
+  const sendError = async (error: string) => {
+    await sendMessage({
+      type: 'error',
+      data: error
+    });
+  };
+
+  (async () => {
     try {
-      if (file.name.endsWith('.csv')) {
-        // 改進 CSV 編碼處理
-        const encodings = ['utf-8', 'big5'];
-        let content = '';
-        let parseError = null;
+      const formData = await request.formData();
+      const file = formData.get('file') as File;
 
-        for (const encoding of encodings) {
-          try {
-            const decoder = new TextDecoder(encoding);
-            content = decoder.decode(buffer);
-            
-            // 嘗試解析 CSV，添加更多的解析選項
-            data = parse(content, {
-              columns: true,
-              skip_empty_lines: true,
-              trim: true,
-              delimiter: ',',
-              relaxColumnCount: true,
-              relaxQuotes: true,
-              skipRecordsWithError: true,
-              comment: '#', // 忽略註釋行
-              quote: '"', // 指定引號字符
-              escape: '\\' // 指定轉義字符
-            });
+      if (!file) {
+        throw new Error('未找到文件');
+      }
 
-            // 檢查是否成功解析到資料並打印調試信息
-            if (data && data.length > 0) {
-              const columns = Object.keys(data[0]);
-              console.log('=== CSV 解析結果 ===');
-              console.log('使用編碼:', encoding);
-              console.log('解析到的欄位:', columns);
-              console.log('第一筆資料:', data[0]);
+      await updateProgress(5, '準備分析文件');
+
+      const buffer = await file.arrayBuffer();
+      let data: any[] = [];
+
+      // 文件解析
+      try {
+        await updateProgress(10, '解析文件格式');
+        
+        if (file.name.endsWith('.csv')) {
+          // CSV 文件處理
+          await updateProgress(15, '處理 CSV 文件');
+          // 改進 CSV 編碼處理
+          const encodings = ['utf-8', 'big5'];
+          let content = '';
+          let parseError = null;
+
+          for (const encoding of encodings) {
+            try {
+              const decoder = new TextDecoder(encoding);
+              content = decoder.decode(buffer);
               
-              // 檢查欄位名稱是否包含特殊字符或 BOM
-              const cleanColumns = columns.map(col => {
-                // 移除可能的 BOM 和特殊字符
-                return col.replace(/^\uFEFF/, '').trim();
+              // 嘗試解析 CSV，添加更多的解析選項
+              data = parse(content, {
+                columns: true,
+                skip_empty_lines: true,
+                trim: true,
+                delimiter: ',',
+                relaxColumnCount: true,
+                relaxQuotes: true,
+                skipRecordsWithError: true,
+                comment: '#', // 忽略註釋行
+                quote: '"', // 指定引號字符
+                escape: '\\' // 指定轉義字符
               });
-              
-              // 更新資料的欄位名稱
-              data = data.map(row => {
-                const newRow: any = {};
-                Object.entries(row).forEach(([key, value]) => {
-                  const cleanKey = key.replace(/^\uFEFF/, '').trim();
-                  newRow[cleanKey] = value;
+
+              // 檢查是否成功解析到資料並打印調試信息
+              if (data && data.length > 0) {
+                const columns = Object.keys(data[0]);
+                console.log('=== CSV 解析結果 ===');
+                console.log('使用編碼:', encoding);
+                console.log('解析到的欄位:', columns);
+                console.log('第一筆資料:', data[0]);
+                
+                // 檢查欄位名稱是否包含特殊字符或 BOM
+                const cleanColumns = columns.map(col => {
+                  // 移除可能的 BOM 和特殊字符
+                  return col.replace(/^\uFEFF/, '').trim();
                 });
-                return newRow;
-              });
+                
+                // 更新資料的欄位名稱
+                data = data.map(row => {
+                  const newRow: any = {};
+                  Object.entries(row).forEach(([key, value]) => {
+                    const cleanKey = key.replace(/^\uFEFF/, '').trim();
+                    newRow[cleanKey] = value;
+                  });
+                  return newRow;
+                });
 
-              // 再次確認清理後的欄位
-              console.log('清理後的欄位:', Object.keys(data[0]));
-              
-              // 檢查是否有評論相關欄位
-              const hasCommentField = Object.keys(data[0]).some(col => {
-                const colLower = col.toLowerCase();
-                return colLower.includes('評論') || 
-                       colLower.includes('內容') || 
-                       colLower.includes('content') || 
-                       colLower.includes('comment') || 
-                       colLower.includes('feedback') || 
-                       colLower.includes('意見') || 
-                       colLower.includes('建議');
-              });
+                // 再次確認清理後的欄位
+                console.log('清理後的欄位:', Object.keys(data[0]));
+                
+                // 檢查是否有評論相關欄位
+                const hasCommentField = Object.keys(data[0]).some(col => {
+                  const colLower = col.toLowerCase();
+                  return colLower.includes('評論') || 
+                         colLower.includes('內容') || 
+                         colLower.includes('content') || 
+                         colLower.includes('comment') || 
+                         colLower.includes('feedback') || 
+                         colLower.includes('意見') || 
+                         colLower.includes('建議');
+                });
 
-              if (hasCommentField) {
-                break; // 找到有效的資料，跳出循環
-              } else {
-                console.log('未找到評論相關欄位，繼續嘗試其他編碼');
+                if (hasCommentField) {
+                  break; // 找到有效的資料，跳出循環
+                } else {
+                  console.log('未找到評論相關欄位，繼續嘗試其他編碼');
+                }
               }
+            } catch (e) {
+              parseError = e;
+              console.error(`使用 ${encoding} 解析失敗:`, e);
+              continue;
             }
-          } catch (e) {
-            parseError = e;
-            console.error(`使用 ${encoding} 解析失敗:`, e);
-            continue;
           }
-        }
 
-        if (!data || data.length === 0) {
-          console.error('CSV 解析失敗，所有嘗試都失敗了');
-          throw new Error('無法解析 CSV 文件或檔案為空');
-        }
+          if (!data || data.length === 0) {
+            console.error('CSV 解析失敗，所有嘗試都失敗了');
+            throw new Error('無法解析 CSV 文件或檔案為空');
+          }
 
-      } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-        // 改進 Excel 日期處理
-        const workbook = XLSX.read(buffer, {
-          type: 'array',
-          cellDates: true
-        });
-        
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        
-        // 獲取原始數據
-        data = XLSX.utils.sheet_to_json(firstSheet, { 
-          raw: true,
-          defval: ''
-        });
+        } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+          // Excel 文件處理
+          await updateProgress(15, '處理 Excel 文件');
+          // 改進 Excel 日期處理
+          const workbook = XLSX.read(buffer, {
+            type: 'array',
+            cellDates: true
+          });
+          
+          const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+          
+          // 獲取原始數據
+          data = XLSX.utils.sheet_to_json(firstSheet, { 
+            raw: true,
+            defval: ''
+          });
 
-        // 處理 Excel 日期格式
-        data = data.map(row => {
-          const newRow = { ...row };
-          Object.entries(row).forEach(([key, value]) => {
-            // 檢查是否為日期欄位
-            if (key.toLowerCase().includes('日期') || 
-                key.toLowerCase().includes('date') || 
-                key.toLowerCase().includes('time')) {
-              if (value) {
-                let dateStr = '';
-                if (value instanceof Date) {
-                  // 如果是日期對象
-                  dateStr = formatDate(value);
-                } else if (typeof value === 'number') {
-                  // 如果是 Excel 序列號
-                  const date = XLSX.SSF.parse_date_code(value);
-                  dateStr = `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}`;
-                } else if (typeof value === 'string') {
-                  // 如果是字符串，嘗試解析
-                  try {
-                    const date = new Date(value);
-                    if (!isNaN(date.getTime())) {
-                      dateStr = formatDate(date);
-                    } else {
+          // 處理 Excel 日期格式
+          data = data.map(row => {
+            const newRow = { ...row };
+            Object.entries(row).forEach(([key, value]) => {
+              // 檢查是否為日期欄位
+              if (key.toLowerCase().includes('日期') || 
+                  key.toLowerCase().includes('date') || 
+                  key.toLowerCase().includes('time')) {
+                if (value) {
+                  let dateStr = '';
+                  if (value instanceof Date) {
+                    // 如果是日期對象
+                    dateStr = formatDate(value);
+                  } else if (typeof value === 'number') {
+                    // 如果是 Excel 序列號
+                    const date = XLSX.SSF.parse_date_code(value);
+                    dateStr = `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}`;
+                  } else if (typeof value === 'string') {
+                    // 如果是字符串，嘗試解析
+                    try {
+                      const date = new Date(value);
+                      if (!isNaN(date.getTime())) {
+                        dateStr = formatDate(date);
+                      } else {
+                        dateStr = value; // 保持原始值
+                      }
+                    } catch {
                       dateStr = value; // 保持原始值
                     }
-                  } catch {
-                    dateStr = value; // 保持原始值
                   }
+                  newRow[key] = dateStr;
                 }
-                newRow[key] = dateStr;
               }
-            }
+            });
+            return newRow;
           });
-          return newRow;
-        });
-      } else {
-        return NextResponse.json(
-          { error: '不支援的文件格式' },
-          { status: 400 }
-        );
-      }
-
-      // 檢查數據是否為空
-      if (!data || data.length === 0) {
-        throw new Error('文件中沒有數據');
-      }
-
-      // 在 normalizedData 映射之前，添加欄位檢查
-      if (data && data.length > 0) {
-        console.log('=== 欄位匹配檢查 ===');
-        const firstRow = data[0];
-        const columns = Object.keys(firstRow);
-        
-        // 檢查並打印所有可能的評論欄位
-        const possibleCommentFields = columns.filter(col => {
-          const colLower = col.toLowerCase();
-          return colLower.includes('評論') || 
-                 colLower.includes('內容') || 
-                 colLower.includes('content') || 
-                 colLower.includes('comment') || 
-                 colLower.includes('feedback') || 
-                 colLower.includes('意見') || 
-                 colLower.includes('建議');
-        });
-        
-        console.log('可能的評論欄位:', possibleCommentFields);
-        console.log('所有可用欄位:', columns);
-      }
-
-      // 標準化欄位名稱
-      // 使用 Promise.all 處理所有行的異步操作
-      const normalizedDataPromises = data.map(async (row, index) => {
-        // 如果是第一行，打印欄位名稱以便調試
-        if (index === 0) {
-          console.log('檔案欄位:', Object.keys(row));
-        }
-
-        // 建立一個函數來尋找符合關鍵字的欄位值
-        const findColumn = (terms: string[]) => {
-          const foundKey = Object.keys(row).find(key => 
-            terms.some(term => key.toLowerCase().includes(term.toLowerCase()))
-          );
-          return foundKey ? row[foundKey] : null;
-        };
-
-        // 公司處理
-        const companyTerms = ['公司', 'company', 'brand', '品牌', 'app', '應用程式'];
-        const company = findColumn(companyTerms) || '未知';
-
-        // 內容處理（必要欄位）
-        const contentTerms = [
-          '評論內容', '內容', 'content', 'comment', 
-          'feedback', '評論', '意見', '建議'
-        ];
-        const content = findColumn(contentTerms);
-        if (!content && index === 0) {
-          console.log('找不到評論內容欄位，可用欄位:', Object.keys(row));
-          console.log('嘗試匹配的關鍵字:', contentTerms);
-          throw new Error(`找不到評論內容欄位，請確保檔案包含以下其中一個欄位: ${contentTerms.join(', ')}`);
-        }
-
-        // 評分處理（必要欄位）
-        const ratingTerms = [
-          '用戶評分', '評分', 'rating', 'score', 
-          '分數', '星級', 'stars', 'star'
-        ];
-        const ratingValue = findColumn(ratingTerms);
-        if (!ratingValue && index === 0) {
-          console.log('找不到評分欄位，可用欄位:', Object.keys(row));
-          console.log('嘗試匹配的關鍵字:', ratingTerms);
-          throw new Error(`找不到評分欄位，請確保檔案包含以下其中一個欄位: ${ratingTerms.join(', ')}`);
-        }
-
-        // 日期處理
-        const dateTerms = ['日期', 'date', 'time', '時間', '建立日期', '評論日期'];
-        const dateValue = findColumn(dateTerms);
-        let formattedDate = dateValue;
-
-        if (dateValue) {
-          try {
-            const date = new Date(dateValue);
-            if (!isNaN(date.getTime())) {
-              formattedDate = formatDate(date);
-            }
-          } catch (e) {
-            console.warn('無法解析日期:', dateValue);
-            formattedDate = dateValue; // 保持原始值
-          }
         } else {
-          formattedDate = formatDate(new Date()); // 使用當前日期
+          throw new Error('不支援的文件格式');
         }
 
-        // 裝置處理
-        const deviceTerms = ['裝置', 'device', 'platform', '平台', '系統'];
-        const device = findColumn(deviceTerms) || '未知';
+        await updateProgress(30, '文件解析完成');
 
-        // 使用 Hugging Face 模型進行情感分析
-        let sentiment = '中性';
-        // 使用 Hugging Face 模型進行分類分析
-        let categories = ['一般'];
+        // 檢查數據是否為空
+        if (!data || data.length === 0) {
+          throw new Error('文件中沒有數據');
+        }
 
-        // 只有當內容存在且不為空時才進行分析
-        if (content && content.trim()) {
-          try {
-            // 嘗試使用 AI 模型進行分析
-            if (HF_API_KEY && HF_API_KEY.length > 10) {
+        // 在 normalizedData 映射之前，添加欄位檢查
+        if (data && data.length > 0) {
+          console.log('=== 欄位匹配檢查 ===');
+          const firstRow = data[0];
+          const columns = Object.keys(firstRow);
+          
+          // 檢查並打印所有可能的評論欄位
+          const possibleCommentFields = columns.filter(col => {
+            const colLower = col.toLowerCase();
+            return colLower.includes('評論') || 
+                   colLower.includes('內容') || 
+                   colLower.includes('content') || 
+                   colLower.includes('comment') || 
+                   colLower.includes('feedback') || 
+                   colLower.includes('意見') || 
+                   colLower.includes('建議');
+          });
+          
+          console.log('可能的評論欄位:', possibleCommentFields);
+          console.log('所有可用欄位:', columns);
+        }
+
+        // 標準化欄位名稱
+        // 使用 Promise.all 處理所有行的異步操作
+        const normalizedDataPromises = [];
+        const batchSize = 5; // 每批處理 5 條評論
+        
+        for (let i = 0; i < data.length; i += batchSize) {
+          const batch = data.slice(i, i + batchSize);
+          const batchPromises = batch.map(async (row, index) => {
+            // 如果是第一行，打印欄位名稱以便調試
+            if (index === 0) {
+              console.log('檔案欄位:', Object.keys(row));
+            }
+
+            // 建立一個函數來尋找符合關鍵字的欄位值
+            const findColumn = (terms: string[]) => {
+              const foundKey = Object.keys(row).find(key => 
+                terms.some(term => key.toLowerCase().includes(term.toLowerCase()))
+              );
+              return foundKey ? row[foundKey] : null;
+            };
+
+            // 公司處理
+            const companyTerms = ['公司', 'company', 'brand', '品牌', 'app', '應用程式'];
+            const company = findColumn(companyTerms) || '未知';
+
+            // 內容處理（必要欄位）
+            const contentTerms = [
+              '評論內容', '內容', 'content', 'comment', 
+              'feedback', '評論', '意見', '建議'
+            ];
+            const content = findColumn(contentTerms);
+            if (!content && index === 0) {
+              console.log('找不到評論內容欄位，可用欄位:', Object.keys(row));
+              console.log('嘗試匹配的關鍵字:', contentTerms);
+              throw new Error(`找不到評論內容欄位，請確保檔案包含以下其中一個欄位: ${contentTerms.join(', ')}`);
+            }
+
+            // 評分處理（必要欄位）
+            const ratingTerms = [
+              '用戶評分', '評分', 'rating', 'score', 
+              '分數', '星級', 'stars', 'star'
+            ];
+            const ratingValue = findColumn(ratingTerms);
+            if (!ratingValue && index === 0) {
+              console.log('找不到評分欄位，可用欄位:', Object.keys(row));
+              console.log('嘗試匹配的關鍵字:', ratingTerms);
+              throw new Error(`找不到評分欄位，請確保檔案包含以下其中一個欄位: ${ratingTerms.join(', ')}`);
+            }
+
+            // 日期處理
+            const dateTerms = ['日期', 'date', 'time', '時間', '建立日期', '評論日期'];
+            const dateValue = findColumn(dateTerms);
+            let formattedDate = dateValue;
+
+            if (dateValue) {
               try {
-                // 並行調用兩個模型以提高效率
-                const [sentimentResult, categoryResult] = await Promise.all([
-                  analyzeSentiment(content),
-                  analyzeCategory(content)
-                ]);
-                
-                sentiment = sentimentResult;
-                categories = categoryResult;
-                console.log("AI 模型分析成功:", { sentiment, categories });
-              } catch (aiError) {
-                console.error("AI 模型分析失敗，使用默認值:", aiError);
-                // 使用默認值
+                const date = new Date(dateValue);
+                if (!isNaN(date.getTime())) {
+                  formattedDate = formatDate(date);
+                }
+              } catch (e) {
+                console.warn('無法解析日期:', dateValue);
+                formattedDate = dateValue; // 保持原始值
+              }
+            } else {
+              formattedDate = formatDate(new Date()); // 使用當前日期
+            }
+
+            // 裝置處理
+            const deviceTerms = ['裝置', 'device', 'platform', '平台', '系統'];
+            const device = findColumn(deviceTerms) || '未知';
+
+            // 使用 Hugging Face 模型進行情感分析
+            let sentiment = '中性';
+            // 使用 Hugging Face 模型進行分類分析
+            let categories = ['一般'];
+
+            // 只有當內容存在且不為空時才進行分析
+            if (content && content.trim()) {
+              try {
+                if (HF_API_KEY && HF_API_KEY.length > 10) {
+                  try {
+                    // 使用批次處理進行分析
+                    const [sentimentResult, categoryResult] = await Promise.all([
+                      analyzeSentiment(content),
+                      analyzeCategory(content)
+                    ]);
+                    
+                    sentiment = sentimentResult;
+                    categories = categoryResult;
+                    console.log("AI 模型分析成功:", { sentiment, categories });
+                  } catch (aiError) {
+                    console.error("AI 模型分析失敗，使用默認值:", aiError);
+                    sentiment = '中性';
+                    categories = ['一般'];
+                  }
+                } else {
+                  console.log("未提供有效的 API 密鑰，使用默認值");
+                  sentiment = '中性';
+                  categories = ['一般'];
+                }
+              } catch (error) {
+                console.error("分析過程出錯:", error);
                 sentiment = '中性';
                 categories = ['一般'];
               }
             } else {
-              console.log("未提供有效的 API 密鑰，使用默認值");
-              // 使用默認值
-              sentiment = '中性';
-              categories = ['一般'];
-            }
-            
-            // 確保最終的標籤是有效的
-            if (!sentiment || sentiment.trim() === '') {
-              sentiment = '中性';
-            }
-            
-            if (!categories || categories.length === 0 || (categories.length === 1 && categories[0].trim() === '')) {
-              categories = ['一般'];
-            }
-            
-            // 記錄最終使用的標籤
-            console.log("最終使用的標籤:", { sentiment, categories });
-            
-          } catch (error) {
-            console.error('分析錯誤:', error);
-            // 使用傳統方法作為備用
-            const sentimentTerms = ['情感', 'sentiment', '情緒'];
-            const sentimentValue = findColumn(sentimentTerms);
-            if (sentimentValue) sentiment = sentimentValue;
+              // 如果沒有內容，使用傳統方法
+              const sentimentTerms = ['情感', 'sentiment', '情緒'];
+              sentiment = findColumn(sentimentTerms) || '中性';
 
-            const categoryTerms = ['分類', 'category', 'type', '類型'];
-            const categoryValue = findColumn(categoryTerms);
-            if (categoryValue) {
-              categories = categoryValue.split(/[,，]/).map((c: string) => c.trim()).filter(Boolean);
+              const categoryTerms = ['分類', 'category', 'type', '類型'];
+              const categoryValue = findColumn(categoryTerms);
+              categories = categoryValue 
+                ? categoryValue.split(/[,，]/).map((c: string) => c.trim()).filter(Boolean)
+                : ['一般'];
+              
+              console.log("無內容，使用傳統方法的標籤:", { sentiment, categories });
             }
-            
-            // 確保最終的標籤是有效的
-            if (!sentiment || sentiment.trim() === '') {
-              sentiment = '中性';
-            }
-            
-            if (!categories || categories.length === 0 || (categories.length === 1 && categories[0].trim() === '')) {
-              categories = ['一般'];
-            }
-            
-            console.log("使用傳統方法的標籤:", { sentiment, categories });
+
+            // 關鍵詞處理
+            const keywordTerms = ['關鍵詞', 'keywords', 'tags', '標籤', '關鍵字'];
+            const keywordsValue = findColumn(keywordTerms);
+            const keywords = keywordsValue 
+              ? keywordsValue.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean)
+              : [];
+
+            // 更新進度
+            const progressPercentage = 40 + Math.floor((i / data.length) * 30);
+            await updateProgress(
+              progressPercentage,
+              `正在處理第 ${i + 1} 至 ${Math.min(i + batchSize, data.length)} 筆資料`
+            );
+
+            return {
+              id: `review-${index}`,
+              company: company,
+              date: formattedDate,
+              content: content,
+              rating: parseFloat(ratingValue) || 0,
+              device: device,
+              category: categories.join(', '),
+              sentiment: sentiment,
+              keywords: keywords
+            };
+          });
+          
+          const batchResults = await Promise.all(batchPromises);
+          normalizedDataPromises.push(...batchResults);
+          
+          if (i + batchSize < data.length) {
+            await delay(1000);
           }
-        } else {
-          // 如果沒有內容，使用傳統方法
-          const sentimentTerms = ['情感', 'sentiment', '情緒'];
-          sentiment = findColumn(sentimentTerms) || '中性';
-
-          const categoryTerms = ['分類', 'category', 'type', '類型'];
-          const categoryValue = findColumn(categoryTerms);
-          categories = categoryValue 
-            ? categoryValue.split(/[,，]/).map((c: string) => c.trim()).filter(Boolean)
-            : ['一般'];
-            
-          console.log("無內容，使用傳統方法的標籤:", { sentiment, categories });
         }
 
-        // 關鍵詞處理
-        const keywordTerms = ['關鍵詞', 'keywords', 'tags', '標籤', '關鍵字'];
-        const keywordsValue = findColumn(keywordTerms);
-        const keywords = keywordsValue 
-          ? keywordsValue.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean)
-          : [];
+        await updateProgress(70, '數據分析中');
 
-        return {
-          id: `review-${index}`,
-          company: company,
-          date: formattedDate,
-          content: content,
-          rating: parseFloat(ratingValue) || 0,
-          device: device,
-          category: categories.join(', '),
-          sentiment: sentiment,
-          keywords: keywords
+        // 計算關鍵詞出現頻率
+        const keywordCounts = normalizedDataPromises.reduce((acc, row) => {
+          row.keywords.forEach((keyword: string) => {
+            acc[keyword] = (acc[keyword] || 0) + 1;
+          });
+          return acc;
+        }, {} as Record<string, number>);
+
+        await updateProgress(80, '生成分析報告');
+
+        // 轉換為所需的關鍵詞格式
+        const keywordsList = Object.entries(keywordCounts)
+          .map(([word, count]) => ({ word, count }))
+          .sort((a, b) => b.count - a.count);
+
+        // 生成分析結果
+        const analysisResult: AnalysisResult = {
+          feedbacks: normalizedDataPromises,
+          keywords: keywordsList,
+          summary: {
+            totalCount: normalizedDataPromises.length,
+            averageRating: calculateAverageRating(normalizedDataPromises),
+            positiveRatio: calculateSentimentRatio(normalizedDataPromises, '正面'),
+            neutralRatio: calculateSentimentRatio(normalizedDataPromises, '中性'),
+            negativeRatio: calculateSentimentRatio(normalizedDataPromises, '負面')
+          }
         };
-      });
 
-      // 等待所有行的處理完成
-      const normalizedData = await Promise.all(normalizedDataPromises);
+        await updateProgress(90, '完成分析');
+        await sendResult(analysisResult);
+        await updateProgress(100, '分析完成');
 
-      // 計算關鍵詞出現頻率
-      const keywordCounts = normalizedData.reduce((acc, row) => {
-        row.keywords.forEach((keyword: string) => {
-          acc[keyword] = (acc[keyword] || 0) + 1;
-        });
-        return acc;
-      }, {} as Record<string, number>);
+      } catch (parseError: any) {
+        throw new Error(`解析文件失敗: ${parseError.message}`);
+      }
 
-      // 轉換為所需的關鍵詞格式
-      const keywordsList = Object.entries(keywordCounts)
-        .map(([word, count]) => ({ word, count }))
-        .sort((a, b) => b.count - a.count);
-
-      // 生成分析結果
-      const analysisResult: AnalysisResult = {
-        feedbacks: normalizedData,
-        keywords: keywordsList,
-        summary: {
-          totalCount: normalizedData.length,
-          averageRating: calculateAverageRating(normalizedData),
-          positiveRatio: calculateSentimentRatio(normalizedData, '正面'),
-          neutralRatio: calculateSentimentRatio(normalizedData, '中性'),
-          negativeRatio: calculateSentimentRatio(normalizedData, '負面')
-        }
-      };
-
-      return NextResponse.json({
-        success: true,
-        data: analysisResult
-      });
-
-    } catch (parseError: any) {
-      console.error('解析文件錯誤:', parseError);
-      return NextResponse.json(
-        { error: `解析文件失敗: ${parseError.message}` },
-        { status: 400 }
-      );
+    } catch (error: any) {
+      await sendError(error.message || '處理文件時發生錯誤');
+    } finally {
+      await writer.close();
     }
+  })();
 
-  } catch (error: any) {
-    console.error('分析過程出錯:', error);
-    return NextResponse.json(
-      { error: error.message || '處理文件時發生錯誤' },
-      { status: 500 }
-    );
-  }
+  return new Response(stream.readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }
 
 // 統一的日期格式化函數

@@ -7,16 +7,29 @@ import { useMediaQuery } from 'react-responsive';
 import { Bot, Globe } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-pro",
-  generationConfig: {
-    temperature: 0.7,
-    maxOutputTokens: 512,
-    topK: 20,
-    topP: 0.8,
+// 使用 NEXT_PUBLIC_ 前綴的環境變數
+const GEMINI_API_KEY = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+
+// 只在有 API key 時初始化
+let genAI: any = null;
+let model: any = null;
+
+if (GEMINI_API_KEY) {
+  try {
+    genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    model = genAI.getGenerativeModel({
+      model: "learnlm-1.5-pro-experimental",
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 512,
+        topK: 20,
+        topP: 0.8,
+      }
+    });
+  } catch (error) {
+    console.error('Failed to initialize Gemini:', error);
   }
-});
+}
 
 interface Message {
   role: 'user' | 'assistant';
@@ -327,8 +340,10 @@ const Chatbot = () => {
     try {
       setIsLoading(true);
       
-      if (!process.env.GEMINI_API_KEY) {
-        throw new Error('Gemini API key is not configured');
+      if (!GEMINI_API_KEY || !model) {
+        throw new Error(language === 'zh' 
+          ? 'AI 服務尚未設定完成，請聯繫管理員。' 
+          : 'AI service is not configured, please contact administrator.');
       }
 
       const relevantContent = getRelevantContent(inputMessage, language);
@@ -361,8 +376,9 @@ ${userMessage.content}
     } catch (error) {
       console.error('Chatbot Error:', {
         error,
-        apiKeyExists: !!process.env.GEMINI_API_KEY,
-        apiKeyPrefix: process.env.GEMINI_API_KEY?.substring(0, 10),
+        hasApiKey: !!GEMINI_API_KEY,
+        hasModel: !!model,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString(),
       });
 
@@ -370,10 +386,10 @@ ${userMessage.content}
         ? '抱歉，系統暫時無法處理您的請求。' 
         : 'Sorry, the system is temporarily unable to process your request.';
       
-      if (!process.env.GEMINI_API_KEY) {
+      if (!GEMINI_API_KEY || !model) {
         errorMessage = language === 'zh'
-          ? '系統配置錯誤，請聯繫管理員。'
-          : 'System configuration error, please contact administrator.';
+          ? 'AI 服務尚未設定完成，請聯繫管理員。'
+          : 'AI service is not configured, please contact administrator.';
       } else if (error instanceof Error) {
         errorMessage += language === 'zh'
           ? '\n錯誤詳情：' + error.message

@@ -109,6 +109,12 @@ const validateDateInput = (dateString: string) => {
   return dateParts.join('-');
 };
 
+interface AnalysisProgress {
+  status: 'idle' | 'processing' | 'completed' | 'error';
+  percentage: number;
+  currentStep: string;
+}
+
 export default function AnalysisPage() {
   const { t, language } = useLanguage();  // 確保引入 language
   const [file, setFile] = useState<File | null>(null);
@@ -166,72 +172,116 @@ export default function AnalysisPage() {
   const [allCategories, setAllCategories] = useState<string[]>([]);
   const [allCompanies, setAllCompanies] = useState<string[]>([]);  // 新增公司列表 state
 
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({
+    status: 'idle',
+    percentage: 0,
+    currentStep: ''
+  });
+
   // 修改 handleAnalyze 函數中的類型定義
   const handleAnalyze = async () => {
     if (!file) return;
 
     setIsAnalyzing(true);
-    setUploadStatus('uploading');
-    setErrorMessage('');
+    setAnalysisProgress({
+      status: 'processing',
+      percentage: 0,
+      currentStep: String(t('analysis.steps.preparing'))
+    });
 
-    // 添加 AI 模型分析提示
-    const aiModelMessage = language === 'zh' 
-      ? '正在使用 AI 模型進行評論情感和分類分析，這可能需要一些時間...' 
-      : 'Using AI models for sentiment and category analysis, this may take some time...';
-    
-    alert(aiModelMessage);
+    const formData = new FormData();
+    formData.append('file', file);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
       const response = await fetch('/api/analyze', {
         method: 'POST',
-        body: formData,
+        body: formData
       });
 
-      const result = await response.json();
-
       if (!response.ok) {
-        throw new Error(result.error || '分類請求失敗');
+        throw new Error('Analysis failed');
       }
 
-      if (!result.success || !result.data) {
-        throw new Error('數據格式錯誤');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No reader available');
+
+      const textDecoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        // 將新的數據添加到緩衝區
+        buffer += textDecoder.decode(value, { stream: true });
+        
+        // 處理完整的訊息
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // 保留最後一個不完整的行
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          
+          try {
+            const message = JSON.parse(line);
+            
+            switch (message.type) {
+              case 'progress':
+                setAnalysisProgress(prev => ({
+                  ...prev,
+                  percentage: message.data.percentage,
+                  currentStep: String(message.data.step)
+                }));
+                break;
+
+              case 'result':
+                const result = message.data;
+                // 提取所有唯一的分類
+                const uniqueCategories = Array.from(new Set(
+                  result.feedbacks.flatMap((f: { category: string }) => 
+                    f.category.split(/[,，]/).map((c: string) => c.trim())
+                  )
+                )) as string[];
+
+                // 提取所有唯一的公司
+                const uniqueCompanies = Array.from(new Set(
+                  result.feedbacks.map((f: { company: string }) => f.company)
+                )) as string[];
+
+                // 設置所有可用的分類和公司
+                setAllCategories(uniqueCategories);
+                setAllCompanies(uniqueCompanies);
+                
+                // 保存原始數據
+                setOriginalData(result);
+                setAnalysisResult(result);
+                break;
+
+              case 'error':
+                throw new Error(message.data);
+            }
+          } catch (e) {
+            console.error('Error processing message:', e, 'Line:', line);
+          }
+        }
       }
 
-      // 提取所有唯一的分類
-      const uniqueCategories = Array.from(new Set(
-        result.data.feedbacks.flatMap((f: { category: string }) => 
-          f.category.split(/[,，]/).map((c: string) => c.trim())
-        )
-      )) as string[];
+      setAnalysisProgress(prev => ({
+        ...prev,
+        status: 'completed',
+        percentage: 100,
+        currentStep: String(t('analysis.steps.completed'))
+      }));
 
-      // 提取所有唯一的公司
-      const uniqueCompanies = Array.from(new Set(
-        result.data.feedbacks.map((f: { company: string }) => f.company)
-      )) as string[];
-
-      // 設置所有可用的分類和公司
-      setAllCategories(uniqueCategories);
-      setAllCompanies(uniqueCompanies);
-      
-      // 保存原始數據
-      setOriginalData(result.data);
-      setAnalysisResult(result.data);
-      setUploadStatus('success');
-
-      // 添加 AI 分析完成提示
-      const aiCompleteMessage = language === 'zh' 
-        ? 'AI 模型分析完成！評論已被自動分類並標記情感。' 
-        : 'AI model analysis completed! Reviews have been automatically categorized and sentiment-tagged.';
-      
-      alert(aiCompleteMessage);
-    } catch (error: any) {
-      console.error('分析過程出錯:', error);
-      setUploadStatus('error');
-      setErrorMessage(error?.message || '未知錯誤');
-      alert(error?.message || '分析過程發生錯誤，請檢查文件格式是否正確');
+    } catch (error) {
+      console.error('Analysis error:', error);
+      setAnalysisProgress(prev => ({
+        ...prev,
+        status: 'error',
+        percentage: 0,
+        currentStep: String(t('analysis.steps.error'))
+      }));
     } finally {
       setIsAnalyzing(false);
     }
