@@ -25,9 +25,6 @@ STOPWORDS = set(['的', '了', '和', '是', '就', '都', '而', '及', '與', 
                 '或', '一個', '沒有', '我們', '你們', '他們', '她們', '有些',
                 '也', '就是', '但是', '可以', '這個', '那個', '這些', '那些'])
 
-# TF-IDF 向量器實例（全局變量，避免重複初始化）
-tfidf_vectorizer = None
-
 def clean_text(text: str) -> str:
     """清理文本，移除特殊字符和多餘的空格"""
     # 移除 URL
@@ -40,8 +37,6 @@ def clean_text(text: str) -> str:
 
 def extract_keywords(text: str, top_n: int = 5) -> KeywordResponse:
     """從文本中提取關鍵詞"""
-    global tfidf_vectorizer
-
     # 清理文本
     cleaned_text = clean_text(text)
     if not cleaned_text:
@@ -54,17 +49,16 @@ def extract_keywords(text: str, top_n: int = 5) -> KeywordResponse:
     if not words:
         return KeywordResponse(keywords=[], word_scores=[])
 
-    # 如果 TF-IDF 向量器未初始化，則初始化
-    if tfidf_vectorizer is None:
-        tfidf_vectorizer = TfidfVectorizer(
-            max_features=1000,
-            token_pattern=r"(?u)\b\w+\b"
-        )
-        # 使用當前文本訓練向量器
-        tfidf_vectorizer.fit([" ".join(words)])
+    # 為當前文本創建新的 TF-IDF 向量器
+    tfidf_vectorizer = TfidfVectorizer(
+        max_features=1000,
+        token_pattern=r"(?u)\b\w+\b"
+    )
 
-    # 轉換文本為 TF-IDF 向量
-    tfidf_vector = tfidf_vectorizer.transform([" ".join(words)])
+    # 使用當前文本訓練向量器
+    word_str = " ".join(words)
+    tfidf_vectorizer.fit([word_str])
+    tfidf_vector = tfidf_vectorizer.transform([word_str])
     
     # 獲取特徵名稱和分數
     feature_names = tfidf_vectorizer.get_feature_names_out()

@@ -61,7 +61,17 @@ export default function DataScraper() {
         throw new Error(result.details || result.error || '爬蟲請求失敗');
       }
 
-      setReviews(result.data);
+      // 將搜尋結果的應用程式名稱加入到評論資料中
+      const reviewsWithAppName = result.data.map((review: Review) => {
+        // 如果有搜尋結果，優先使用 Apple Store 的應用程式名稱
+        const appName = searchResults?.appleApp || searchResults?.googleApp || '';
+        return {
+          ...review,
+          appName
+        };
+      });
+
+      setReviews(reviewsWithAppName);
       setShowTable(true);
       
     } catch (error) {
@@ -83,7 +93,8 @@ export default function DataScraper() {
       評分: row.rating || 0,
       平台: row.platform || '',
       開發者回覆: row.developerResponse || '',
-      語言: row.language || ''
+      語言: row.language || '',
+      應用程式名稱: row.appName || ''
     }));
 
     // 建立工作簿
@@ -99,7 +110,8 @@ export default function DataScraper() {
       { wch: 8 },   // 評分
       { wch: 15 },  // 平台
       { wch: 50 },  // 開發者回覆
-      { wch: 10 }   // 語言
+      { wch: 10 },  // 語言
+      { wch: 30 }   // 應用程式名稱
     ];
     ws['!cols'] = columnWidths;
 

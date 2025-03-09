@@ -60,6 +60,10 @@ const CATEGORY_MODEL_API = "https://api-inference.huggingface.co/models/jackietu
 // Hugging Face API 密鑰
 const HF_API_KEY = process.env.HUGGING_FACE_API_KEY || "";
 
+// 添加中文斷詞 API 配置
+const CHINESE_API_URL = process.env.CHINESE_API_URL || "https://chinese-nlp-api.onrender.com/api/v1/keywords";
+const CHINESE_API_KEY = process.env.CHINESE_API_KEY || "";
+
 // 延遲函數
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -177,6 +181,33 @@ async function processBatch<T>(
     }
   }
   return results;
+}
+
+// 添加斷詞函數
+async function segmentText(text: string): Promise<string[]> {
+  try {
+    const response = await axios.post(
+      CHINESE_API_URL,
+      { text, top_n: 10 },
+      {
+        headers: {
+          "Authorization": `Bearer ${CHINESE_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+    
+    // 從回應中提取關鍵詞數組
+    if (response.data && response.data.keywords) {
+      return response.data.keywords;
+    }
+    
+    console.error("API 回應格式不符合預期:", response.data);
+    return [];
+  } catch (error) {
+    console.error("關鍵詞提取 API 錯誤:", error);
+    return [];
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -525,9 +556,20 @@ export async function POST(request: NextRequest) {
             // 關鍵詞處理
             const keywordTerms = ['關鍵詞', 'keywords', 'tags', '標籤', '關鍵字'];
             const keywordsValue = findColumn(keywordTerms);
-            const keywords = keywordsValue 
+            let keywords = keywordsValue 
               ? keywordsValue.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean)
               : [];
+
+            // 如果有內容，使用斷詞 API
+            if (content && content.trim()) {
+              try {
+                const segmentedWords = await segmentText(content);
+                // 合併現有關鍵詞和斷詞結果，去重
+                keywords = Array.from(new Set([...keywords, ...segmentedWords]));
+              } catch (error) {
+                console.error("斷詞處理錯誤:", error);
+              }
+            }
 
             // 更新進度
             const progressPercentage = 40 + Math.floor((i / data.length) * 30);

@@ -20,6 +20,7 @@ export interface Review {
   platform: string;
   developerResponse: string;
   language: string;
+  appName?: string;
 }
 
 export interface ApiResponse {

@@ -4,10 +4,10 @@ import type { Keyword } from '@/types/feedback';
 
 // 用於驗證環境配置的函數
 function validateEnvironment() {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
     throw new Error('GEMINI_API_KEY environment variable is not configured');
   }
-  return process.env.GEMINI_API_KEY;
+  return process.env.NEXT_PUBLIC_GEMINI_API_KEY;
 }
 
 // 驗證請求數據的函數
