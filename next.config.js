@@ -48,7 +48,7 @@ const nextConfig = {
       return config;
     },
     serverRuntimeConfig: {
-        maxDuration: 10,
+        maxDuration: 60,
     },
     eslint: {
       ignoreDuringBuilds: true,

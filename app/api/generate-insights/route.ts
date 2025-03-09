@@ -101,7 +101,7 @@ const GEMINI_CONFIG = {
   }
 } as const;
 
-export const maxDuration = 10; // 改為 10 秒以符合免費版本限制
+export const maxDuration = 60; // 改為 60 秒以符合免費版本限制
 
 // 主要的處理函數
 export async function POST(req: Request) {
