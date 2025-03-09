@@ -1,0 +1,13 @@
+services:
+  # A Docker web service
+  - type: web
+    name: nlp-api
+    env: docker
+    region: singapore  # 選擇離你較近的區域
+    plan: free  # 使用免費方案
+    healthCheckPath: /docs  # 使用 Swagger UI 路徑作為健康檢查
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: PORT  # Render 會自動分配端口
+        value: 8000 

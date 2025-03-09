@@ -64,6 +64,10 @@ const HF_API_KEY = process.env.HUGGING_FACE_API_KEY || "";
 const CHINESE_API_URL = process.env.CHINESE_API_URL || "https://chinese-nlp-api.onrender.com/api/v1/keywords";
 const CHINESE_API_KEY = process.env.CHINESE_API_KEY || "";
 
+// 添加英文斷詞 API 配置
+const ENGLISH_API_URL = process.env.ENGLISH_API_URL || "https://english-nlp-api.onrender.com/api/v1/keywords";
+const ENGLISH_API_KEY = process.env.ENGLISH_API_KEY || "";
+
 // 延遲函數
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -183,15 +187,19 @@ async function processBatch<T>(
   return results;
 }
 
-// 添加斷詞函數
-async function segmentText(text: string): Promise<string[]> {
+// 修改斷詞函數以支援中英文
+async function segmentText(text: string, language: string): Promise<string[]> {
   try {
+    // 根據語言選擇對應的 API
+    const apiUrl = language === 'zh' ? CHINESE_API_URL : ENGLISH_API_URL;
+    const apiKey = language === 'zh' ? CHINESE_API_KEY : ENGLISH_API_KEY;
+
     const response = await axios.post(
-      CHINESE_API_URL,
+      apiUrl,
       { text, top_n: 10 },
       {
         headers: {
-          "Authorization": `Bearer ${CHINESE_API_KEY}`,
+          "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json"
         }
       }
@@ -205,7 +213,7 @@ async function segmentText(text: string): Promise<string[]> {
     console.error("API 回應格式不符合預期:", response.data);
     return [];
   } catch (error) {
-    console.error("關鍵詞提取 API 錯誤:", error);
+    console.error(`${language === 'zh' ? '中文' : '英文'}關鍵詞提取 API 錯誤:`, error);
     return [];
   }
 }
@@ -505,6 +513,10 @@ export async function POST(request: NextRequest) {
             const deviceTerms = ['裝置', 'device', 'platform', '平台', '系統'];
             const device = findColumn(deviceTerms) || '未知';
 
+            // 語言處理
+            const languageTerms = ['語言', 'language', '語系'];
+            const language = findColumn(languageTerms) || 'zh'; // 默認使用中文
+
             // 使用 Hugging Face 模型進行情感分析
             let sentiment = '中性';
             // 使用 Hugging Face 模型進行分類分析
@@ -560,10 +572,10 @@ export async function POST(request: NextRequest) {
               ? keywordsValue.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean)
               : [];
 
-            // 如果有內容，使用斷詞 API
+            // 如果有內容，根據語言使用對應的斷詞 API
             if (content && content.trim()) {
               try {
-                const segmentedWords = await segmentText(content);
+                const segmentedWords = await segmentText(content, language);
                 // 合併現有關鍵詞和斷詞結果，去重
                 keywords = Array.from(new Set([...keywords, ...segmentedWords]));
               } catch (error) {
