@@ -33,6 +33,8 @@ const translations: Translations = {
     'features.reviewAnalysis.desc': '深入分析用戶評論數據',
     'features.dataScraping': '資料爬取',
     'features.dataScraping.desc': '自動化爬取應用商店評論',
+    'features.competitorAnalysis': '競品分析',
+    'features.competitorAnalysis.desc': '分析競品數據和洞察',
 
     // 篩選器
     'filter.dateRange': '時間範圍',
@@ -480,6 +482,34 @@ const translations: Translations = {
     'analysis.generateInsights': '生成洞察分析',
     'analysis.generatingInsights': '生成分析中...',
     'analysis.insightsTitle': 'AI 洞察分析結果',
+
+    // 競品分析頁面
+    'competitor.title': '競品分析前置模組',
+    'competitor.analysis.title': '競品分析結果',
+    'competitor.search.title': '智能應用程式搜尋',
+    'competitor.search.description': '與AI助手對話，搜尋並分析相關應用程式',
+    'competitor.search.placeholder': '輸入您的問題，例如：幫我找出類似IKEA的家具零售App',
+    'competitor.results.title': '搜尋結果',
+    'competitor.results.description': '選擇要分析的應用程式 (最多3個)',
+    'competitor.button.select': '選擇',
+    'competitor.button.selected': '已選擇',
+    'competitor.button.findUrls': '自動查找應用商店連結',
+    'competitor.button.back': '返回搜尋',
+    'competitor.button.startScraping': '開始爬取應用數據',
+    'competitor.button.analyze': '進行競品分析',
+    'competitor.scraping.title': '應用數據爬取進度',
+    'competitor.scraping.description': '正在從應用商店爬取詳細資料',
+    'competitor.scraping.progress': '已完成: {progress}%',
+    'competitor.scraping.timeLeft': '預計剩餘時間: {minutes} 分鐘',
+    'competitor.scraping.complete': '資料爬取完成',
+    'competitor.scraping.completeDesc': '已成功爬取 {count} 個應用程式的資料，可以進行競品分析。',
+    // 競品分析 AI 回應
+    'competitor.ai.furniture.response': '我找到了幾個與IKEA類似的家具零售應用程式。這些是台灣市場上最受歡迎的家具零售App：',
+    'competitor.ai.compare.response': '要比較這些應用程式的功能，我需要先確定您想分析哪些App。請從搜尋結果中選擇您想比較的應用程式，或者告訴我具體的App名稱。',
+    'competitor.ai.default.response': '您想了解哪些家具零售相關的應用程式？例如，您可以詢問「幫我找出類似IKEA的家具零售App」或「比較台灣市場上主要的家具App功能」。',
+    'competitor.category.shopping': '購物',
+    'competitor.app.nitori': '宜得利家居 Nitori',
+    'competitor.app.trihouse': '特力屋 TeLiWu',
   },
   en: {
     // Navigation
@@ -495,6 +525,8 @@ const translations: Translations = {
     'features.reviewAnalysis.desc': 'Deep analysis of user review data',
     'features.dataScraping': 'Data Scraping',
     'features.dataScraping.desc': 'Automated app store review scraping',
+    'features.competitorAnalysis': 'Competitor Analysis',
+    'features.competitorAnalysis.desc': 'Analyze competitor data and insights',
 
     // Filters
     'filter.dateRange': 'Date Range',
@@ -941,6 +973,34 @@ const translations: Translations = {
     'analysis.generateInsights': 'Generate Insights',
     'analysis.generatingInsights': 'Generating Insights...',
     'analysis.insightsTitle': 'AI Insights Analysis Results',
+
+    // Competitor Analysis Page
+    'competitor.title': 'Competitor Analysis Pre-module',
+    'competitor.analysis.title': 'Competitor Analysis Results',
+    'competitor.search.title': 'Smart App Search',
+    'competitor.search.description': 'Chat with AI assistant to search and analyze apps',
+    'competitor.search.placeholder': 'Enter your question, e.g.: Find furniture retail apps similar to IKEA',
+    'competitor.results.title': 'Search Results',
+    'competitor.results.description': 'Select apps to analyze (max 3)',
+    'competitor.button.select': 'Select',
+    'competitor.button.selected': 'Selected',
+    'competitor.button.findUrls': 'Auto-find App Store Links',
+    'competitor.button.back': 'Back to Search',
+    'competitor.button.startScraping': 'Start Data Scraping',
+    'competitor.button.analyze': 'Start Analysis',
+    'competitor.scraping.title': 'App Data Scraping Progress',
+    'competitor.scraping.description': 'Scraping detailed information from app stores',
+    'competitor.scraping.progress': 'Completed: {progress}%',
+    'competitor.scraping.timeLeft': 'Estimated time remaining: {minutes} minutes',
+    'competitor.scraping.complete': 'Data Scraping Complete',
+    'competitor.scraping.completeDesc': 'Successfully scraped data for {count} applications, ready for competitive analysis.',
+    // 競品分析 AI 回應
+    'competitor.ai.furniture.response': 'I found several furniture retail apps similar to IKEA. These are the most popular furniture retail apps in the Taiwan market:',
+    'competitor.ai.compare.response': 'To compare these apps\' features, I need to know which apps you want to analyze. Please select the apps you want to compare from the search results, or tell me specific app names.',
+    'competitor.ai.default.response': 'Which furniture retail apps would you like to learn about? For example, you can ask "Find furniture retail apps similar to IKEA" or "Compare the main furniture apps in the Taiwan market".',
+    'competitor.category.shopping': 'Shopping',
+    'competitor.app.nitori': 'Nitori',
+    'competitor.app.trihouse': 'Test Rite TeLiWu',
   }
 };
 

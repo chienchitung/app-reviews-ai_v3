@@ -141,6 +141,15 @@ export default function Navbar({}: NavbarProps) {
                   <span>{language === 'zh' ? 'English' : '中文'}</span>
                 </button>
               </li>
+              <li className="pt-4 border-t">
+                <Link
+                  href="/competitor-analysis"
+                  className="block px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-100 rounded-md mt-2"
+                >
+                  {t('features.competitorAnalysis')}
+                  <p className="text-xs text-gray-500 font-normal">{t('features.competitorAnalysis.desc')}</p>
+                </Link>
+              </li>
             </ul>
           </nav>
         </div>
@@ -194,6 +203,13 @@ export default function Navbar({}: NavbarProps) {
                       >
                         {t('features.dataScraping')}
                         <p className="text-xs text-gray-500 font-normal">{t('features.dataScraping.desc')}</p>
+                      </Link>
+                      <Link
+                        href="/competitor-analysis"
+                        className="block px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-100 rounded-md mt-2"
+                      >
+                        {t('features.competitorAnalysis')}
+                        <p className="text-xs text-gray-500 font-normal">{t('features.competitorAnalysis.desc')}</p>
                       </Link>
                     </div>
                   )}
