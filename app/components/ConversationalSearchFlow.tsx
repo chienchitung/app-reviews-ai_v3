@@ -28,18 +28,49 @@ interface SearchResult {
   selected: boolean;
 }
 
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+}
+
+const INITIAL_MESSAGE = {
+  role: "assistant" as const,
+  content: "您好！我可以幫您搜尋和分析家具零售相關的應用程式。請告訴我您想了解哪些App或市場？",
+  timestamp: new Date(),
+};
+
+const SYSTEM_PROMPT = `你是一個專業的應用商店分析助手。請遵循以下規則：
+
+1. 回應邏輯：
+   - 當用戶提供明確的App名稱時，列出該領域前三名的主要競爭對手
+   - 當用戶只提到市場類別但沒有具體App時，請引導用戶提供一個具體的App名稱作為參考
+   - 如果用戶詢問其他非App的問題，請引導回到應用商店搜尋
+
+2. 回應格式：
+   - 使用Markdown格式回應
+   - 競爭對手列表使用無序列表（-）
+   - 重要資訊使用粗體（**）標示
+   - 使用繁體中文回答
+
+3. 家具零售App範例回應：
+   如果用戶明確提到IKEA，回覆：
+   "以下是台灣家具零售市場的主要競爭對手：
+   - **IKEA (宜家家居)**：全球最大的家具零售商
+   - **Nitori (宜得利家居)**：日本第一大家具連鎖
+   - **特力屋**：台灣領導的居家修繕零售商"
+
+4. 引導回應範例：
+   如果用戶只說"想找家具App"，回覆：
+   "為了幫您找到最相關的競爭對手，請提供一個您感興趣的**具體App名稱**作為參考。
+   例如：IKEA、特力屋、宜得利等。"`;
+
 export default function ConversationalSearchFlow() {
   const { t } = useLanguage();
   const [currentStep, setCurrentStep] = useState<FlowStep>("search");
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [conversation, setConversation] = useState<Array<{ role: "user" | "assistant"; content: string; timestamp: Date }>>([
-    {
-      role: "assistant",
-      content: "您好！我可以幫您搜尋和分析家具零售相關的應用程式。請告訴我您想了解哪些App或市場？",
-      timestamp: new Date(),
-    },
-  ]);
+  const [conversation, setConversation] = useState<Message[]>([INITIAL_MESSAGE]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([
     {
       id: "ikea",
@@ -91,7 +122,47 @@ export default function ConversationalSearchFlow() {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const handleSendMessage = () => {
+  const callGeminiAPI = async (userMessage: string) => {
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [...conversation, { role: 'user', content: userMessage }],
+          systemPrompt: SYSTEM_PROMPT,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('API request failed');
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // 檢查回應是否包含家具零售相關的App
+      const hasRetailApps = data.response.toLowerCase().includes('ikea') || 
+                           data.response.toLowerCase().includes('宜得利') || 
+                           data.response.toLowerCase().includes('特力屋');
+      
+      // 如果回應包含家具零售相關的App，顯示搜尋結果
+      if (hasRetailApps) {
+        setShowResults(true);
+      }
+
+      return data.response;
+    } catch (error) {
+      console.error('Error calling Gemini API:', error);
+      return '抱歉，我暫時無法處理您的請求。請稍後再試。';
+    }
+  };
+
+  const handleSendMessage = async () => {
     if (!query.trim()) return;
 
     const userMessage = {
@@ -99,32 +170,21 @@ export default function ConversationalSearchFlow() {
       content: query,
       timestamp: new Date(),
     };
+
     setConversation(prev => [...prev, userMessage]);
     setQuery("");
     setIsLoading(true);
 
-    setTimeout(() => {
-      let aiResponse;
-      let showSearchResults = false;
+    const aiResponse = await callGeminiAPI(query);
+    
+    const assistantMessage = {
+      role: "assistant" as const,
+      content: aiResponse,
+      timestamp: new Date(),
+    };
 
-      if (query.toLowerCase().includes("ikea") || query.toLowerCase().includes("家具")) {
-        aiResponse = "我找到了幾個與IKEA類似的家具零售應用程式。這些是台灣市場上最受歡迎的家具零售App：";
-        showSearchResults = true;
-      } else if (query.toLowerCase().includes("比較") || query.toLowerCase().includes("功能")) {
-        aiResponse = "要比較這些應用程式的功能，我需要先確定您想分析哪些App。請從搜尋結果中選擇您想比較的應用程式，或者告訴我具體的App名稱。";
-      } else {
-        aiResponse = "您想了解哪些家具零售相關的應用程式？例如，您可以詢問「幫我找出類似IKEA的家具零售App」或「比較台灣市場上主要的家具App功能」。";
-      }
-
-      const assistantMessage = {
-        role: "assistant" as const,
-        content: aiResponse,
-        timestamp: new Date(),
-      };
-      setConversation(prev => [...prev, assistantMessage]);
-      setIsLoading(false);
-      setShowResults(showSearchResults);
-    }, 1500);
+    setConversation(prev => [...prev, assistantMessage]);
+    setIsLoading(false);
   };
 
   const toggleAppSelection = (appId: string) => {
@@ -162,7 +222,7 @@ export default function ConversationalSearchFlow() {
         }
       }));
       
-      // 2秒後重置狀態
+      // 1秒後重置狀態
       setTimeout(() => {
         setCopySuccess(prev => ({
           ...prev,
@@ -171,7 +231,7 @@ export default function ConversationalSearchFlow() {
             [store]: false
           }
         }));
-      }, 2000);
+      }, 1000);
     } catch (err) {
       console.error('Failed to copy text: ', err);
     }
@@ -236,7 +296,7 @@ export default function ConversationalSearchFlow() {
                             </div>
                           )}
                           <div className={`rounded-lg p-3 ${message.role === "user" ? "bg-black text-white" : "bg-gray-100"}`}>
-                            {message.content}
+                            {formatMessageContent(message.content)}
                           </div>
                         </div>
                       </div>
@@ -584,6 +644,17 @@ export default function ConversationalSearchFlow() {
 
   const showActionButtons = (step: FlowStep): boolean => {
     return ["search", "url-scraping", "scraping-progress", "scraping-complete"].includes(step);
+  };
+
+  const formatMessageContent = (content: string) => {
+    return content.split('\n').map((line, index) => (
+      <p key={index} className={`
+        ${line.startsWith('- ') ? 'ml-4' : ''}
+        ${line.includes('**') ? 'font-semibold' : ''}
+      `}>
+        {line.replace(/\*\*/g, '')}
+      </p>
+    ));
   };
 
   return (
