@@ -19,13 +19,9 @@ type FlowStep = "search" | "url-scraping" | "scraping-progress" | "scraping-comp
 interface SearchResult {
   id: string;
   name: string;
-  developer: string;
-  icon: string;
-  category: string;
-  rating: number;
-  appStoreUrl: string;
-  playStoreUrl: string;
   selected: boolean;
+  appStoreUrl?: string;
+  playStoreUrl?: string;
 }
 
 interface Message {
@@ -36,34 +32,43 @@ interface Message {
 
 const INITIAL_MESSAGE = {
   role: "assistant" as const,
-  content: "您好！我可以幫您搜尋和分析家具零售相關的應用程式。請告訴我您想了解哪些App或市場？",
+  content: "您好！我可以幫您搜尋台灣相關的應用程式。請告訴我您想了解哪些App？",
   timestamp: new Date(),
 };
 
 const SYSTEM_PROMPT = `你是一個專業的應用商店分析助手。請遵循以下規則：
 
-1. 回應邏輯：
-   - 當用戶提供明確的App名稱時，列出該領域前三名的主要競爭對手
-   - 當用戶只提到市場類別但沒有具體App時，請引導用戶提供一個具體的App名稱作為參考
-   - 如果用戶詢問其他非App的問題，請引導回到應用商店搜尋
+1. 一般搜尋模式：
+   - 當用戶提供明確的App名稱時，直接列出該領域前五名的台灣主要競爭對手名稱
+   - 當用戶提供的App名稱不完整或不清楚時，請提供App Store和Google Play的搜尋連結，請用戶提供完整名稱
 
-2. 回應格式：
-   - 使用Markdown格式回應
-   - 競爭對手列表使用無序列表（-）
-   - 重要資訊使用粗體（**）標示
-   - 使用繁體中文回答
+2. 新增應用程式模式：
+   - 當用戶想要新增應用程式時，請詢問具體是哪個應用程式
+   - 如果用戶提供的名稱不完整或不清楚，請詢問是否為某個特定的應用程式
+   - 確認用戶提供的應用程式名稱後，列出完整的應用程式名稱供確認
+   - 不要在這個模式下提供競爭對手名稱
 
-3. 家具零售App範例回應：
-   如果用戶明確提到IKEA，回覆：
-   "以下是台灣家具零售市場的主要競爭對手：
-   - **IKEA (宜家家居)**：全球最大的家具零售商
-   - **Nitori (宜得利家居)**：日本第一大家具連鎖
-   - **特力屋**：台灣領導的居家修繕零售商"
+3. 回應格式：
+   - 一般模式下使用無序列表（-）列出名稱
+   - 新增模式下直接列出完整應用程式名稱
 
-4. 引導回應範例：
-   如果用戶只說"想找家具App"，回覆：
-   "為了幫您找到最相關的競爭對手，請提供一個您感興趣的**具體App名稱**作為參考。
-   例如：IKEA、特力屋、宜得利等。"`;
+4. 範例回應：
+   一般模式：
+   "- IKEA
+   - Nitori
+   - 特力屋"
+
+   新增模式：
+   用戶：我想新增Netflix
+   助手：請問您要新增的是"Netflix"這個串流影音應用程式嗎？請回覆「是」來確認。
+
+   用戶：我想新增IG
+   助手：請問您要新增的是"Instagram"這個應用程式嗎？請回覆「是」來確認。
+   
+5. 用戶提供不明確名稱時：
+   "請提供完整的應用程式名稱，您可以透過以下連結搜尋：
+   App Store: <a href='https://apps.apple.com/tw/search' target='_blank' rel='noopener noreferrer'>點擊這裡搜尋</a>
+   Google Play: <a href='https://play.google.com/store/search?hl=zh_TW' target='_blank' rel='noopener noreferrer'>點擊這裡搜尋<`;
 
 export default function ConversationalSearchFlow() {
   const { t } = useLanguage();
@@ -71,46 +76,15 @@ export default function ConversationalSearchFlow() {
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [conversation, setConversation] = useState<Message[]>([INITIAL_MESSAGE]);
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([
-    {
-      id: "ikea",
-      name: "IKEA",
-      developer: "IKEA Systems B.V.",
-      icon: "/placeholder.svg?height=60&width=60",
-      category: "購物",
-      rating: 4.6,
-      appStoreUrl: "",
-      playStoreUrl: "",
-      selected: false,
-    },
-    {
-      id: "nitori",
-      name: "宜得利家居 Nitori",
-      developer: "Nitori Co., Ltd.",
-      icon: "/placeholder.svg?height=60&width=60",
-      category: "購物",
-      rating: 4.3,
-      appStoreUrl: "",
-      playStoreUrl: "",
-      selected: false,
-    },
-    {
-      id: "trihouse",
-      name: "特力屋 TeLiWu",
-      developer: "Test Rite International Co., Ltd.",
-      icon: "/placeholder.svg?height=60&width=60",
-      category: "購物",
-      rating: 4.1,
-      appStoreUrl: "",
-      playStoreUrl: "",
-      selected: false,
-    },
-  ]);
-  const [selectedApps, setSelectedApps] = useState<SearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [showResults, setShowResults] = useState(false);
+  const [selectedApps, setSelectedApps] = useState<SearchResult[]>([]);
   const [scrapingStatus, setScrapingStatus] = useState<"idle" | "searching" | "scraping" | "completed" | "error">("idle");
   const [scrapingProgress, setScrapingProgress] = useState(0);
   const [copySuccess, setCopySuccess] = useState<{ [key: string]: { appStore: boolean; playStore: boolean } }>({});
+  const [apiCallInProgress, setApiCallInProgress] = useState(false);
+  const [searchResultsHistory, setSearchResultsHistory] = useState<{ [key: string]: SearchResult[] }>({});
+  const [currentSearchMessageIndex, setCurrentSearchMessageIndex] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -122,8 +96,19 @@ export default function ConversationalSearchFlow() {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
+  // 生成唯一ID的函數
+  const generateUniqueId = (name: string) => {
+    return `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
+
   const callGeminiAPI = async (userMessage: string) => {
+    if (apiCallInProgress) {
+      return null;
+    }
+
     try {
+      setApiCallInProgress(true);
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -145,25 +130,233 @@ export default function ConversationalSearchFlow() {
         throw new Error(data.error);
       }
 
-      // 檢查回應是否包含家具零售相關的App
-      const hasRetailApps = data.response.toLowerCase().includes('ikea') || 
-                           data.response.toLowerCase().includes('宜得利') || 
-                           data.response.toLowerCase().includes('特力屋');
-      
-      // 如果回應包含家具零售相關的App，顯示搜尋結果
-      if (hasRetailApps) {
-        setShowResults(true);
+      // 解析回應中的應用程式名稱
+      const appNames = data.response
+        .split('\n')
+        .filter((line: string) => line.match(/^[-\d\s]*[^-\n]+$/))
+        .map((line: string) => line.replace(/^[-\d\s]*/, '').trim())
+        .filter((name: string) => name.length > 0);
+
+      // 生成搜索結果但不立即顯示
+      if (appNames.length > 0) {
+        const results = appNames.map((name: string) => ({
+          id: generateUniqueId(name),
+          name: name,
+          selected: false
+        }));
+
+        // 將新的搜索結果存入歷史記錄
+        const newMessageIndex = conversation.length;
+        setSearchResultsHistory(prev => ({
+          ...prev,
+          [newMessageIndex]: results
+        }));
       }
 
       return data.response;
     } catch (error) {
       console.error('Error calling Gemini API:', error);
       return '抱歉，我暫時無法處理您的請求。請稍後再試。';
+    } finally {
+      setApiCallInProgress(false);
+    }
+  };
+
+  const formatMessageContent = (
+    content: string,
+    isAssistant: boolean,
+    userQuery?: string,
+    messageIndex?: number
+  ) => {
+    // Check if we're in custom app add mode
+    const isCustomAppAddMode = content.includes("請告訴我您想要新增的應用程式名稱") || 
+                              content.includes("請問您要新增的是") ||
+                              content.includes("請問您要找的是") ||
+                              content.includes("已將") ||
+                              (messageIndex && messageIndex > 0 && conversation[messageIndex - 1]?.content.includes("請告訴我您想要新增的應用程式名稱"));
+
+    // Check if the message contains search links
+    const hasSearchLinks = content.includes('點擊這裡搜尋');
+    
+    // Extract app names from the message content only if it doesn't contain search links
+    const appNames = !hasSearchLinks ? content.split('\n')
+      .filter(line => line.match(/^[-\s]*([^-\n：。，、？！]+)$/))
+      .map(line => line.replace(/^[-\s]*/, '').trim())
+      .filter(name => 
+        name.length > 0 && 
+        !name.includes("好的，我確認您要新增以下應用程式") &&
+        !name.includes("請告訴我") &&
+        !name.includes("請問您") &&
+        !name.includes("已將")
+      ) : [];
+    
+    const formattedContent = content.split('\n').map((line, lineIndex) => {
+      // Check if line contains HTML link
+      if (line.includes('<a')) {
+        const styledLine = line.replace(
+          /<a /g,
+          '<a class="text-blue-600 hover:text-blue-800 hover:underline transition-colors" '
+        );
+        return (
+          <p
+            key={`link-${lineIndex}-${line.slice(0, 20)}`}
+            className={line.startsWith('- ') ? 'ml-4' : ''}
+            dangerouslySetInnerHTML={{ __html: styledLine }}
+          />
+        );
+      }
+      
+      // Handle regular text lines
+      return (
+        <p
+          key={`text-${lineIndex}-${line.slice(0, 20)}`}
+          className={`
+            ${line.startsWith('- ') ? 'ml-4' : ''}
+            ${line.includes('**') ? 'font-semibold' : ''}
+          `}
+        >
+          {line.replace(/\*\*/g, '')}
+        </p>
+      );
+    });
+
+    // Only show add button for assistant messages with app names and no search links
+    // Don't show button for initial message, custom app add flow, or when in add mode
+    if (isAssistant && appNames.length > 0 && !hasSearchLinks && 
+        typeof messageIndex === 'number' && 
+        messageIndex > 0 && 
+        content !== INITIAL_MESSAGE.content &&
+        !isCustomAppAddMode) {
+      return (
+        <>
+          {formattedContent}
+          <div className="mt-4">
+            <Button
+              onClick={() => addAppsToResults(appNames)}
+              className="bg-black hover:bg-black/90 text-white flex items-center gap-2"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14" />
+                <path d="M12 5v14" />
+              </svg>
+              新增這些應用程式
+            </Button>
+          </div>
+        </>
+      );
+    }
+
+    return formattedContent;
+  };
+
+  const addAppsToResults = (appNames: string[]) => {
+    // 創建新的應用程式對象，但排除已存在的
+    const newApps = appNames
+      .filter(name => !searchResults.some(existing => existing.name === name))
+      .filter(name => name.trim().length > 0 && !name.includes("好的，我確認您要新增以下應用程式"))
+      .map(name => ({
+        id: generateUniqueId(name),
+        name: name,
+        selected: false
+      }));
+
+    if (newApps.length > 0) {
+      setSearchResults(prev => [...prev, ...newApps]);
+    }
+  };
+
+  const handleCustomAppAdd = async () => {
+    const userMessage = {
+      role: "user" as const,
+      content: "我想新增一個應用程式來比較",
+      timestamp: new Date(),
+    };
+
+    setConversation(prev => [...prev, userMessage]);
+    setQuery("");
+    setIsLoading(true);
+
+    const aiResponse = {
+      role: "assistant" as const,
+      content: "請告訴我您想要新增的應用程式名稱，可以一次提供多個，我會幫您確認完整的應用程式名稱。",
+      timestamp: new Date(),
+    };
+
+    setConversation(prev => [...prev, aiResponse]);
+    setIsLoading(false);
+  };
+
+  const handleAppNameConfirmation = async (userInput: string) => {
+    // 檢查上一條消息是否是請求新增應用程式
+    const lastMessage = conversation[conversation.length - 1];
+    if (lastMessage && lastMessage.content === "請告訴我您想要新增的應用程式名稱，可以一次提供多個，我會幫您確認完整的應用程式名稱。") {
+      // 使用 API 來解析和驗證應用程式名稱，但不要搜尋競爭對手
+      const aiResponse = await callGeminiAPI(`請幫我確認以下應用程式的完整名稱："${userInput}"。
+如果是知名應用程式，請直接詢問用戶是否要新增這個應用程式。
+如果不確定，請詢問是否為某個特定的應用程式。
+請不要列出任何競爭對手。
+範例回應格式：
+請問您要新增的是"LINE"這個網路服務應用程式嗎？`);
+      
+      if (aiResponse) {
+        const assistantMessage = {
+          role: "assistant" as const,
+          content: aiResponse,
+          timestamp: new Date(),
+        };
+        setConversation(prev => [...prev, assistantMessage]);
+      }
+    } else if (lastMessage && (lastMessage.content.includes("請問您要新增的是") || lastMessage.content.includes("請問您要找的是"))) {
+      // 如果用戶確認了應用程式名稱
+      if (userInput.toLowerCase() === "是" || userInput.toLowerCase() === "yes" || userInput.toLowerCase() === "對") {
+        // 從上一條消息中解析所有應用程式名稱（從雙引號中提取）
+        const appNameMatches = [...lastMessage.content.matchAll(/"([^"]+)"/g)];
+        if (appNameMatches.length > 0) {
+          const newApps = appNameMatches.map(match => ({
+            id: generateUniqueId(match[1].trim()),
+            name: match[1].trim(),
+            selected: false
+          }));
+
+          // 將新的應用程式添加到搜索結果中
+          setSearchResults(prev => {
+            const existingNames = new Set(prev.map(app => app.name));
+            const uniqueNewApps = newApps.filter(app => !existingNames.has(app.name));
+            return [...prev, ...uniqueNewApps];
+          });
+          
+          setShowResults(true);
+          setCurrentSearchMessageIndex(conversation.length);
+
+          // 更新歷史記錄
+          setSearchResultsHistory(prev => ({
+            ...prev,
+            [conversation.length]: newApps
+          }));
+
+          // 添加確認消息
+          const confirmationMessage = {
+            role: "assistant" as const,
+            content: `已將${newApps.map(app => `"${app.name}"`).join('、')}加入到搜尋結果中。您可以繼續新增其他應用程式，或開始選擇要分析的應用程式。`,
+            timestamp: new Date(),
+          };
+
+          setConversation(prev => [...prev, confirmationMessage]);
+        }
+      } else {
+        // 如果用戶否定，繼續詢問
+        const assistantMessage = {
+          role: "assistant" as const,
+          content: "請告訴我您想要新增的應用程式名稱，我會幫您確認。",
+          timestamp: new Date(),
+        };
+        setConversation(prev => [...prev, assistantMessage]);
+      }
     }
   };
 
   const handleSendMessage = async () => {
-    if (!query.trim()) return;
+    if (!query.trim() || apiCallInProgress) return;
 
     const userMessage = {
       role: "user" as const,
@@ -175,24 +368,147 @@ export default function ConversationalSearchFlow() {
     setQuery("");
     setIsLoading(true);
 
-    const aiResponse = await callGeminiAPI(query);
-    
-    const assistantMessage = {
-      role: "assistant" as const,
-      content: aiResponse,
-      timestamp: new Date(),
-    };
+    // 檢查是否在新增應用程式的流程中
+    const lastMessage = conversation[conversation.length - 1];
+    if (lastMessage && (
+      lastMessage.content === "請告訴我您想要新增的應用程式名稱，可以一次提供多個，我會幫您確認完整的應用程式名稱。" ||
+      lastMessage.content.includes("請確認這些是您要新增的應用程式嗎？")
+    )) {
+      await handleAppNameConfirmation(query);
+    } else {
+      // 正常的搜索流程
+      const aiResponse = await callGeminiAPI(query);
+      
+      if (aiResponse) {
+        const assistantMessage = {
+          role: "assistant" as const,
+          content: aiResponse,
+          timestamp: new Date(),
+        };
 
-    setConversation(prev => [...prev, assistantMessage]);
+        setConversation(prev => [...prev, assistantMessage]);
+
+        // 解析回應中的應用程式名稱
+        const appNames = aiResponse
+          .split('\n')
+          .filter((line: string) => line.match(/^[-\d\s]*[^-\n]+$/))
+          .map((line: string) => line.replace(/^[-\d\s]*/, '').trim())
+          .filter((name: string) => name.length > 0);
+
+        if (appNames.length > 0) {
+          const results = appNames.map((name: string) => ({
+            id: generateUniqueId(name),
+            name: name,
+            selected: false
+          }));
+
+          // 更新歷史記錄
+          setSearchResultsHistory(prev => ({
+            ...prev,
+            [conversation.length]: results
+          }));
+        }
+      }
+    }
+    
     setIsLoading(false);
   };
 
+  const showSearchResults = (messageIndex: number) => {
+    console.log('Showing search results for message index:', messageIndex);
+    console.log('Current history:', searchResultsHistory);
+    console.log('Current search message index:', currentSearchMessageIndex);
+    console.log('Show results:', showResults);
+    
+    // 如果點擊的是當前顯示的結果，則隱藏結果
+    if (currentSearchMessageIndex === messageIndex && showResults) {
+      setShowResults(false);
+      setCurrentSearchMessageIndex(null);
+      return;
+    }
+
+    // 從歷史記錄中獲取結果
+    const results = searchResultsHistory[messageIndex];
+    if (results) {
+      // 顯示新的結果，同步已選擇的應用程式狀態
+      setSearchResults(results.map(app => ({
+        ...app,
+        // 檢查這個應用程式是否在全局選中列表中
+        selected: selectedApps.some(selectedApp => selectedApp.name === app.name)
+      })));
+      setShowResults(true);
+      setCurrentSearchMessageIndex(messageIndex);
+    } else {
+      // 如果沒有找到結果，從消息內容中解析
+      const message = conversation[messageIndex];
+      if (message && message.content) {
+        const appNames = message.content
+          .split('\n')
+          .filter(line => line.match(/^[-\d\s]*[^-\n]+$/))
+          .map(line => line.replace(/^[-\d\s]*/, '').trim())
+          .filter(name => name.length > 0);
+
+        const newResults = appNames.map(name => ({
+          id: generateUniqueId(name),
+          name: name,
+          // 檢查這個應用程式是否在全局選中列表中
+          selected: selectedApps.some(selectedApp => selectedApp.name === name)
+        }));
+
+        // 更新歷史記錄
+        setSearchResultsHistory(prev => ({
+          ...prev,
+          [messageIndex]: newResults
+        }));
+
+        setSearchResults(newResults);
+        setShowResults(true);
+        setCurrentSearchMessageIndex(messageIndex);
+      }
+    }
+  };
+
   const toggleAppSelection = (appId: string) => {
-    const updatedResults = searchResults.map(app => 
-      app.id === appId ? { ...app, selected: !app.selected } : app
-    );
-    setSearchResults(updatedResults);
-    setSelectedApps(updatedResults.filter(app => app.selected));
+    const app = searchResults.find(a => a.id === appId);
+    if (!app) return;
+
+    // 檢查是否已經選擇了三個不同的應用程式
+    const uniqueSelectedApps = new Set(selectedApps.map(a => a.name));
+    
+    // 如果是取消選擇，或者還沒有選滿三個，就允許操作
+    if (app.selected || uniqueSelectedApps.size < 3) {
+      // 更新當前搜索結果的選擇狀態
+      setSearchResults(prevResults =>
+        prevResults.map(a => 
+          a.id === appId ? { ...a, selected: !a.selected } : a
+        )
+      );
+
+      // 更新選中的應用程式列表
+      setSelectedApps(prevSelected => {
+        if (app.selected) {
+          // 如果是取消選擇，從列表中移除
+          return prevSelected.filter(a => a.name !== app.name);
+        } else {
+          // 如果是新增選擇
+          return [...prevSelected, { ...app, selected: true }];
+        }
+      });
+
+      // 更新所有歷史記錄中的選擇狀態
+      setSearchResultsHistory(prev => {
+        const newHistory = { ...prev };
+        // 遍歷所有歷史記錄，更新相同名稱應用程式的選擇狀態
+        Object.keys(newHistory).forEach(key => {
+          newHistory[key] = newHistory[key].map(historyApp => 
+            historyApp.name === app.name 
+              ? { ...historyApp, selected: !app.selected }
+              : historyApp
+          );
+        });
+        return newHistory;
+      });
+    }
   };
 
   const handleUrlInput = (appId: string, store: "appStore" | "playStore", url: string) => {
@@ -296,7 +612,12 @@ export default function ConversationalSearchFlow() {
                             </div>
                           )}
                           <div className={`rounded-lg p-3 ${message.role === "user" ? "bg-black text-white" : "bg-gray-100"}`}>
-                            {formatMessageContent(message.content)}
+                            {formatMessageContent(
+                              message.content,
+                              message.role === "assistant",
+                              message.role === "assistant" && index > 0 ? conversation[index - 1].content : undefined,
+                              message.role === "assistant" ? index : undefined
+                            )}
                           </div>
                         </div>
                       </div>
@@ -326,60 +647,68 @@ export default function ConversationalSearchFlow() {
                   </div>
 
                   <div className="flex gap-2">
-                    <Input
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="輸入您的問題，例如：幫我找出類似IKEA的家具零售App"
-                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                    />
-                    <Button onClick={handleSendMessage} disabled={isLoading || !query.trim()} className="bg-black hover:bg-black/90 text-white">
-                      <Send className="h-4 w-4" />
+                    <div className="flex-1 flex gap-2">
+                      <Input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="輸入您的問題，例如：幫我找出類似IKEA的家具零售App"
+                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                      />
+                      <Button onClick={handleSendMessage} disabled={isLoading || !query.trim()} className="bg-black hover:bg-black/90 text-white">
+                        <Send className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="border-black text-black hover:bg-black/10 whitespace-nowrap"
+                      onClick={handleCustomAppAdd}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2">
+                        <path d="M5 12h14" />
+                        <path d="M12 5v14" />
+                      </svg>
+                      新增應用程式
                     </Button>
                   </div>
                 </div>
               </CardContent>
             </Card>
 
-            {showResults && (
+            {Object.keys(searchResultsHistory).length > 0 && (
               <Card className="mb-6">
                 <CardHeader>
                   <CardTitle>搜尋結果</CardTitle>
-                  <CardDescription>選擇要分析的應用程式 (最多3個)</CardDescription>
+                  <CardDescription>選擇要分析的應用程式 (最多3個) {new Set(selectedApps.map(app => app.name)).size}/3</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {searchResults.map((app) => (
-                      <Card key={app.id} className={`overflow-hidden ${app.selected ? "border-primary" : ""}`}>
-                        <CardHeader className="pb-2">
-                          <div className="flex items-center gap-4">
-                            <img
-                              src={app.icon}
-                              alt={`${app.name} Logo`}
-                              className="w-12 h-12 rounded-lg"
-                            />
-                            <div>
+                  <div className="max-h-[400px] overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {searchResults.map((app) => (
+                        <Card key={app.id} className={`overflow-hidden ${app.selected ? "border-primary" : ""}`}>
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center">
                               <CardTitle className="text-lg">{app.name}</CardTitle>
-                              <CardDescription>{app.developer}</CardDescription>
                             </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent>
-                          <div className="flex justify-between text-sm mb-4">
-                            <span>{app.category}</span>
-                            <span>評分: {app.rating}</span>
-                          </div>
-                        </CardContent>
-                        <CardFooter>
-                          <Button
-                            variant={app.selected ? "default" : "outline"}
-                            className={`w-full ${app.selected ? "bg-black hover:bg-black/90 text-white" : "border-black text-black hover:bg-black/10"}`}
-                            onClick={() => toggleAppSelection(app.id)}
-                          >
-                            {app.selected ? "已選擇" : "選擇"}
-                          </Button>
-                        </CardFooter>
-                      </Card>
-                    ))}
+                          </CardHeader>
+                          <CardFooter>
+                            <Button
+                              variant={app.selected ? "default" : "outline"}
+                              className={`w-full ${
+                                app.selected 
+                                  ? "bg-black hover:bg-black/90 text-white" 
+                                  : new Set(selectedApps.map(a => a.name)).size >= 3 
+                                    ? "border-gray-200 text-gray-400 hover:bg-transparent cursor-not-allowed"
+                                    : "border-black text-black hover:bg-black/10"
+                              }`}
+                              onClick={() => toggleAppSelection(app.id)}
+                              disabled={!app.selected && new Set(selectedApps.map(a => a.name)).size >= 3}
+                            >
+                              {app.selected ? "取消選擇" : "選擇"}
+                            </Button>
+                          </CardFooter>
+                        </Card>
+                      ))}
+                    </div>
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-end">
@@ -412,8 +741,7 @@ export default function ConversationalSearchFlow() {
               <div className="space-y-6">
                 {selectedApps.map((app) => (
                   <div key={`${app.id}-url`} className="border rounded-lg p-4">
-                    <div className="flex items-center gap-3 mb-4">
-                      <img src={app.icon} alt={`${app.name} Logo`} className="w-8 h-8 rounded-lg" />
+                    <div className="flex items-center mb-4">
                       <h3 className="font-medium">{app.name}</h3>
                     </div>
 
@@ -428,13 +756,13 @@ export default function ConversationalSearchFlow() {
                           <Input
                             type="text"
                             placeholder="正在查找App Store URL..."
-                            value={app.appStoreUrl}
+                            value={app.appStoreUrl || ""}
                             onChange={(e) => handleUrlInput(app.id, "appStore", e.target.value)}
                             className={app.appStoreUrl ? "border-green-500" : ""}
                           />
                           <Button
                             variant="outline"
-                            onClick={() => copyToClipboard(app.id, "appStore", app.appStoreUrl)}
+                            onClick={() => copyToClipboard(app.id, "appStore", app.appStoreUrl || "")}
                             className="border-black hover:bg-black/10"
                             disabled={!app.appStoreUrl}
                           >
@@ -456,13 +784,13 @@ export default function ConversationalSearchFlow() {
                           <Input
                             type="text"
                             placeholder="正在查找Google Play URL..."
-                            value={app.playStoreUrl}
+                            value={app.playStoreUrl || ""}
                             onChange={(e) => handleUrlInput(app.id, "playStore", e.target.value)}
                             className={app.playStoreUrl ? "border-green-500" : ""}
                           />
                           <Button
                             variant="outline"
-                            onClick={() => copyToClipboard(app.id, "playStore", app.playStoreUrl)}
+                            onClick={() => copyToClipboard(app.id, "playStore", app.playStoreUrl || "")}
                             className="border-black hover:bg-black/10"
                             disabled={!app.playStoreUrl}
                           >
@@ -590,28 +918,15 @@ export default function ConversationalSearchFlow() {
                   {selectedApps.map((app) => (
                     <Card key={`${app.id}-summary`}>
                       <CardHeader className="pb-2">
-                        <div className="flex items-center gap-3">
-                          <img src={app.icon} alt={`${app.name} Logo`} className="w-8 h-8 rounded-lg" />
+                        <div className="flex items-center">
                           <CardTitle className="text-lg">{app.name}</CardTitle>
                         </div>
                       </CardHeader>
                       <CardContent>
                         <div className="space-y-2 text-sm">
                           <div className="flex justify-between">
-                            <span>評論數量:</span>
-                            <span className="font-medium">2,500+</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>評分:</span>
-                            <span className="font-medium">{app.rating}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>最後更新:</span>
-                            <span className="font-medium">2023-11-15</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>版本:</span>
-                            <span className="font-medium">2.1.0</span>
+                            <span>狀態:</span>
+                            <span className="font-medium">已完成分析</span>
                           </div>
                         </div>
                       </CardContent>
@@ -644,17 +959,6 @@ export default function ConversationalSearchFlow() {
 
   const showActionButtons = (step: FlowStep): boolean => {
     return ["search", "url-scraping", "scraping-progress", "scraping-complete"].includes(step);
-  };
-
-  const formatMessageContent = (content: string) => {
-    return content.split('\n').map((line, index) => (
-      <p key={index} className={`
-        ${line.startsWith('- ') ? 'ml-4' : ''}
-        ${line.includes('**') ? 'font-semibold' : ''}
-      `}>
-        {line.replace(/\*\*/g, '')}
-      </p>
-    ));
   };
 
   return (

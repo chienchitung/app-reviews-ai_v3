@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
 
     // Initialize the model with the same configuration as Chatbot.tsx
     const model = genAI.getGenerativeModel({
-      model: "learnlm-1.5-pro-experimental",
+      model: "gemini-2.0-flash-001",
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 512,

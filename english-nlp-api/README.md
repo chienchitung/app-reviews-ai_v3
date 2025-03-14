@@ -1,6 +1,19 @@
 # English NLP API
 
-This is a FastAPI-based API for processing English text using Natural Language Processing (NLP) techniques. The API provides functionality for text tokenization, lemmatization, part-of-speech tagging, and keyword extraction using TF-IDF.
+A FastAPI-based API for processing English text using Natural Language Processing (NLP) techniques.
+
+## Table of Contents
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Docker Installation](#docker-installation)
+  - [Local Installation](#local-installation)
+- [API Documentation](#api-documentation)
+- [API Endpoints](#api-endpoints)
+  - [Text Segmentation](#text-segmentation)
+  - [Keyword Extraction](#keyword-extraction)
+  - [Batch Keyword Extraction](#batch-keyword-extraction)
+- [Configuration](#configuration)
+- [Testing](#testing)
 
 ## Features
 
@@ -10,60 +23,64 @@ This is a FastAPI-based API for processing English text using Natural Language P
 - Part-of-speech tagging
 - Keyword extraction using TF-IDF
 
-## Installation and Running
+## Getting Started
 
-### Option 1: Using Docker (Recommended)
+### Docker Installation (Recommended)
 
-1. Make sure you have Docker and Docker Compose installed
-2. Clone this repository
-3. Run the API using Docker Compose:
-```bash
-docker-compose up --build
-```
+1. Prerequisites:
+   - Docker
+   - Docker Compose
 
-The API will be available at `http://localhost:8000`
+2. Setup and Run:
+   ```bash
+   # Clone the repository
+   # Build and start the container
+   docker-compose up --build
+   ```
 
-### Option 2: Local Installation
+   The API will be available at `http://localhost:8000`
 
-1. Create a virtual environment (recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+### Local Installation
+
+1. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
 2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 3. Start the API server:
-```bash
-uvicorn main:app --reload
-```
+   ```bash
+   uvicorn main:app --reload
+   ```
 
-The API will be available at `http://localhost:8000`
+   The API will be available at `http://localhost:8000`
 
 ## API Documentation
 
-Once the server is running, you can access:
-- Interactive API documentation (Swagger UI): `http://localhost:8000/docs`
-- Alternative API documentation (ReDoc): `http://localhost:8000/redoc`
+Access the API documentation through:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
 ## API Endpoints
 
-### 1. POST /api/v1/segment
+### Text Segmentation
 
-Segment a single text into tokens, with lemmatization and POS tagging.
+**Endpoint:** `POST /api/v1/segment`
 
-Request body:
+Segments text into tokens with lemmatization and POS tagging.
+
 ```json
+// Request
 {
     "text": "The product quality is excellent but shipping was slow"
 }
-```
 
-Response:
-```json
+// Response
 {
     "tokens": ["product", "quality", "excellent", "shipping", "slow"],
     "lemmas": ["product", "quality", "excellent", "shipping", "slow"],
@@ -71,31 +88,33 @@ Response:
 }
 ```
 
-### 2. POST /api/v1/keywords
+### Keyword Extraction
 
-Extract keywords from a single text using TF-IDF.
+**Endpoint:** `POST /api/v1/keywords`
 
-Request body:
+Extracts keywords from a single text using TF-IDF.
+
 ```json
+// Request
 {
     "text": "The product quality is excellent but shipping was slow"
 }
-```
 
-Response:
-```json
+// Response
 {
     "keywords": ["product quality", "excellent", "shipping", "slow"],
     "scores": [0.5, 0.3, 0.2, 0.1]
 }
 ```
 
-### 3. POST /api/v1/batch-keywords
+### Batch Keyword Extraction
 
-Extract keywords from multiple texts using TF-IDF.
+**Endpoint:** `POST /api/v1/batch-keywords`
 
-Request body:
+Extracts keywords from multiple texts using TF-IDF.
+
 ```json
+// Request
 {
     "texts": [
         "The product quality is excellent but shipping was slow",
@@ -103,10 +122,8 @@ Request body:
         "Great value for money, highly recommended!"
     ]
 }
-```
 
-Response:
-```json
+// Response
 {
     "keywords": ["product quality", "customer service", "value money", "shipping", "excellent"],
     "tfidf_matrix": [
@@ -117,44 +134,34 @@ Response:
 }
 ```
 
-## Query Parameters
+## Configuration
 
-All keyword extraction endpoints (`/keywords` and `/batch-keywords`) support the following query parameter:
-
+Query Parameters available for keyword extraction endpoints:
 - `max_features` (optional): Maximum number of keywords to extract (default: 10)
 
-## Error Handling
-
-The API includes proper error handling and will return appropriate HTTP status codes and error messages when issues occur.
-
-## Testing with Docker
+## Testing
 
 To test the API using Docker:
 
-1. Build and start the container:
-```bash
-docker-compose up --build
-```
+1. Start the services:
+   ```bash
+   docker-compose up --build
+   ```
 
-2. Test the API endpoints using curl or any HTTP client:
-```bash
-# Test segmentation
-curl -X POST "http://localhost:8000/api/v1/segment" \
-     -H "Content-Type: application/json" \
-     -d '{"text": "The product quality is excellent"}'
+2. Example test commands:
+   ```bash
+   # Test segmentation
+   curl -X POST "http://localhost:8000/api/v1/segment" \
+        -H "Content-Type: application/json" \
+        -d '{"text": "The product quality is excellent"}'
 
-# Test keyword extraction
-curl -X POST "http://localhost:8000/api/v1/keywords" \
-     -H "Content-Type: application/json" \
-     -d '{"text": "The product quality is excellent"}'
+   # Test keyword extraction
+   curl -X POST "http://localhost:8000/api/v1/keywords" \
+        -H "Content-Type: application/json" \
+        -d '{"text": "The product quality is excellent"}'
+   ```
 
-# Test batch keyword extraction
-curl -X POST "http://localhost:8000/api/v1/batch-keywords" \
-     -H "Content-Type: application/json" \
-     -d '{"texts": ["The product quality is excellent", "Customer service needs improvement"]}'
-```
-
-3. Stop the container:
-```bash
-docker-compose down
-``` 
+3. Stop the services:
+   ```bash
+   docker-compose down
+   ``` 
