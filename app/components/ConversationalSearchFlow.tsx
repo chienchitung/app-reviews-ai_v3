@@ -625,7 +625,6 @@ export default function ConversationalSearchFlow() {
       const apiUrl = `${process.env.NEXT_PUBLIC_MULTI_APPS_SEARCH_API_URL}?${params.toString()}`;
       
       console.log('搜尋應用程式:', apps.map(app => app.name));
-      console.log('API URL:', apiUrl);
 
       const response = await fetch(apiUrl, {
         method: 'GET',
@@ -642,27 +641,89 @@ export default function ConversationalSearchFlow() {
       const data: MultiAppSearchResponse = await response.json();
       console.log('API 響應數據:', data);
 
+      // 提取關鍵字的函數
+      const extractKeywords = (name: string): string[] => {
+        return name.toLowerCase()
+          .replace(/[+]/g, '') // 移除加號
+          .replace(/行動銀行/g, '銀行') // 標準化常見詞組
+          .replace(/[app|應用程式]/gi, '') // 移除通用詞
+          .split(/[\s,.-]+/) // 用空格、逗號、點和破折號分割
+          .filter(keyword => keyword.length >= 2) // 過濾掉太短的關鍵字
+          .filter(keyword => !['mobile', 'bank', 'banking'].includes(keyword)); // 過濾英文通用詞
+      };
+
       // 更新應用程式的 URL
       setSelectedApps(prev => prev.map(app => {
-        // 尋找對應的結果
-        const appResults = data.results.filter(result => {
-          if (!result?.name || !app?.name) return false;
+        // 獲取搜尋關鍵字
+        const searchKeywords = extractKeywords(app.name);
+        console.log('搜尋關鍵字:', searchKeywords);
+
+        // 計算每個結果的匹配分數
+        const scoredResults = data.results.map(result => {
+          if (!result?.name) return { result, score: 0 };
           
-          const searchName = app.name.toLowerCase();
-          const resultName = result.name.toLowerCase();
-          return searchName.includes(resultName) || resultName.includes(searchName);
+          // 獲取結果名稱的關鍵字
+          const resultKeywords = extractKeywords(result.name);
+          console.log('結果關鍵字:', resultKeywords);
+          
+          let score = 0;
+          let matchedKeywords = 0;
+
+          // 計算關鍵字匹配數
+          searchKeywords.forEach(searchKeyword => {
+            resultKeywords.forEach(resultKeyword => {
+              // 完全匹配
+              if (searchKeyword === resultKeyword) {
+                score += 2;
+                matchedKeywords++;
+              }
+              // 部分包含
+              else if (resultKeyword.includes(searchKeyword) || 
+                       searchKeyword.includes(resultKeyword)) {
+                score += 1;
+                matchedKeywords += 0.5;
+              }
+            });
+          });
+
+          // 計算匹配度百分比
+          const totalPossibleMatches = searchKeywords.length;
+          const matchPercentage = (matchedKeywords / totalPossibleMatches) * 100;
+
+          return { 
+            result, 
+            score,
+            matchPercentage,
+            platform: result.link.includes('apps.apple.com') ? 'appStore' : 'playStore'
+          };
         });
 
-        // 分別找出 App Store 和 Google Play 的 URL
-        const appStoreResult = appResults.find(result => result?.link?.includes('apps.apple.com'));
-        const playStoreResult = appResults.find(result => result?.link?.includes('play.google.com'));
+        // 分別找出 App Store 和 Google Play 的最佳匹配
+        const appStoreResults = scoredResults
+          .filter(({ result }) => result.link.includes('apps.apple.com'))
+          .sort((a, b) => b.score - a.score);
 
+        const playStoreResults = scoredResults
+          .filter(({ result }) => result.link.includes('play.google.com'))
+          .sort((a, b) => b.score - a.score);
+
+        // 設定匹配閾值
+        const MATCH_THRESHOLD = 30; // 降低閾值到30%，因為我們現在的匹配更嚴格
+        
+        const bestAppStoreMatch = appStoreResults[0]?.matchPercentage >= MATCH_THRESHOLD 
+          ? appStoreResults[0].result.link : '';
+        const bestPlayStoreMatch = playStoreResults[0]?.matchPercentage >= MATCH_THRESHOLD 
+          ? playStoreResults[0].result.link : '';
+
+        // 如果沒有找到任何匹配，設置錯誤訊息
+        const noMatches = !bestAppStoreMatch && !bestPlayStoreMatch;
+        
         return {
           ...app,
-          appStoreUrl: appStoreResult?.link || '',
-          playStoreUrl: playStoreResult?.link || '',
+          appStoreUrl: bestAppStoreMatch,
+          playStoreUrl: bestPlayStoreMatch,
           isLoading: false,
-          error: appResults.length === 0 ? '找不到對應的應用程式' : undefined
+          error: noMatches ? '找不到相符的應用程式' : undefined
         };
       }));
 
