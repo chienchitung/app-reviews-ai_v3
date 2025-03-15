@@ -611,6 +611,60 @@ export default function ConversationalSearchFlow() {
     }
   };
 
+  const extractKeywords = (text: string): string[] => {
+    // 移除特殊字符，保留中文、英文、數字
+    const cleanText = text.toLowerCase()
+      .replace(/[+]/g, ' ')  // 將加號替換為空格
+      .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, ' '); // 只保留英文、數字、中文和空格
+
+    // 分離英文和數字
+    const englishAndNumbers = cleanText.match(/[a-z0-9]+/g) || [];
+    
+    // 分離中文字（按每個字分開）
+    const chineseChars = cleanText.match(/[\u4e00-\u9fff]/g) || [];
+    
+    // 組合中文詞（2-4個字的組合）
+    const chinesePhrases: string[] = [];
+    for (let i = 0; i < chineseChars.length; i++) {
+      // 單字
+      chinesePhrases.push(chineseChars[i]);
+      
+      // 雙字詞
+      if (i + 1 < chineseChars.length) {
+        chinesePhrases.push(chineseChars[i] + chineseChars[i + 1]);
+      }
+      
+      // 三字詞
+      if (i + 2 < chineseChars.length) {
+        chinesePhrases.push(chineseChars[i] + chineseChars[i + 1] + chineseChars[i + 2]);
+      }
+    }
+
+    // 合併所有關鍵字並去重
+    const allKeywords = [...englishAndNumbers, ...chinesePhrases]
+      .filter(k => k.length >= 2) // 過濾掉太短的關鍵字
+      .filter(k => {
+        // 過濾掉純數字
+        const isOnlyNumbers = /^\d+$/.test(k);
+        return !isOnlyNumbers;
+      });
+
+    return Array.from(new Set(allKeywords));
+  };
+
+  // 選擇主要關鍵字的邏輯也需要改進
+  const selectPrimaryKeyword = (keywords: string[]): string => {
+    // 如果有英文關鍵字，優先使用
+    const englishKeyword = keywords.find(k => /^[a-z0-9]+$/.test(k));
+    if (englishKeyword) {
+      return englishKeyword;
+    }
+
+    // 否則使用最長的中文關鍵字
+    const sortedByLength = [...keywords].sort((a, b) => b.length - a.length);
+    return sortedByLength[0] || '';
+  };
+
   const searchAppUrls = async (apps: SearchResult[]) => {
     try {
       setSelectedApps(prev => prev.map(app => ({
@@ -619,113 +673,194 @@ export default function ConversationalSearchFlow() {
         error: undefined
       })));
 
-      const params = new URLSearchParams();
-      apps.forEach(app => params.append('search_terms', app.name));
+      // 處理每個應用的搜尋
+      const results = await Promise.all(apps.map(async (app) => {
+        try {
+          // 基本關鍵字提取
+          const extractBasicKeywords = (text: string): string[] => {
+            const cleanText = text.toLowerCase()
+              .replace(/[+]/g, ' ')
+              .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, ' ');
+            return cleanText.split(/\s+/).filter(k => k.length >= 2);
+          };
 
-      const apiUrl = `${process.env.NEXT_PUBLIC_MULTI_APPS_SEARCH_API_URL}?${params.toString()}`;
-      
-      console.log('搜尋應用程式:', apps.map(app => app.name));
+          // 進階關鍵字提取
+          const extractAdvancedKeywords = (text: string): string[] => {
+            const cleanText = text.toLowerCase()
+              .replace(/[+]/g, ' ')
+              .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, ' ');
 
-      const response = await fetch(apiUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${process.env.NEXT_PUBLIC_MULTI_APPS_SEARCH_API_KEY}`
-        }
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `API 請求失敗: ${response.status}`);
-      }
-
-      const data: MultiAppSearchResponse = await response.json();
-      console.log('API 響應數據:', data);
-
-      // 提取關鍵字的函數
-      const extractKeywords = (name: string): string[] => {
-        return name.toLowerCase()
-          .replace(/[+]/g, '') // 移除加號
-          .replace(/行動銀行/g, '銀行') // 標準化常見詞組
-          .replace(/[app|應用程式]/gi, '') // 移除通用詞
-          .split(/[\s,.-]+/) // 用空格、逗號、點和破折號分割
-          .filter(keyword => keyword.length >= 2) // 過濾掉太短的關鍵字
-          .filter(keyword => !['mobile', 'bank', 'banking'].includes(keyword)); // 過濾英文通用詞
-      };
-
-      // 更新應用程式的 URL
-      setSelectedApps(prev => prev.map(app => {
-        // 獲取搜尋關鍵字
-        const searchKeywords = extractKeywords(app.name);
-        console.log('搜尋關鍵字:', searchKeywords);
-
-        // 計算每個結果的匹配分數
-        const scoredResults = data.results.map(result => {
-          if (!result?.name) return { result, score: 0 };
-          
-          // 獲取結果名稱的關鍵字
-          const resultKeywords = extractKeywords(result.name);
-          console.log('結果關鍵字:', resultKeywords);
-          
-          let score = 0;
-          let matchedKeywords = 0;
-
-          // 計算關鍵字匹配數
-          searchKeywords.forEach(searchKeyword => {
-            resultKeywords.forEach(resultKeyword => {
-              // 完全匹配
-              if (searchKeyword === resultKeyword) {
-                score += 2;
-                matchedKeywords++;
+            // 分離英文和數字
+            const englishAndNumbers = cleanText.match(/[a-z0-9]+/g) || [];
+            
+            // 分離中文字
+            const chineseChars = cleanText.match(/[\u4e00-\u9fff]/g) || [];
+            
+            // 組合中文詞
+            const chinesePhrases: string[] = [];
+            for (let i = 0; i < chineseChars.length; i++) {
+              chinesePhrases.push(chineseChars[i]);
+              if (i + 1 < chineseChars.length) {
+                chinesePhrases.push(chineseChars[i] + chineseChars[i + 1]);
               }
-              // 部分包含
-              else if (resultKeyword.includes(searchKeyword) || 
-                       searchKeyword.includes(resultKeyword)) {
-                score += 1;
-                matchedKeywords += 0.5;
+              if (i + 2 < chineseChars.length) {
+                chinesePhrases.push(chineseChars[i] + chineseChars[i + 1] + chineseChars[i + 2]);
+              }
+            }
+
+            return Array.from(new Set([...englishAndNumbers, ...chinesePhrases]))
+              .filter(k => k.length >= 2)
+              .filter(k => !/^\d+$/.test(k));
+          };
+
+          // 選擇主要關鍵字
+          const selectPrimaryKeyword = (keywords: string[]): string => {
+            const englishKeyword = keywords.find(k => /^[a-z0-9]+$/.test(k));
+            return englishKeyword || keywords.sort((a, b) => b.length - a.length)[0] || '';
+          };
+
+          // 計算匹配分數
+          const calculateMatchScore = (result: any, keywords: string[]) => {
+            if (!result?.name) return { score: 0, matchPercentage: 0 };
+            
+            const resultKeywords = extractAdvancedKeywords(result.name);
+            let score = 0;
+            const matchedKeywords = new Set<string>();
+            
+            keywords.forEach(searchKeyword => {
+              resultKeywords.forEach(resultKeyword => {
+                if (searchKeyword === resultKeyword) {
+                  score += 2;
+                  matchedKeywords.add(searchKeyword);
+                } else if (resultKeyword.includes(searchKeyword) || searchKeyword.includes(resultKeyword)) {
+                  score += 1;
+                  matchedKeywords.add(searchKeyword);
+                }
+              });
+            });
+
+            const matchPercentage = (matchedKeywords.size / keywords.length) * 100;
+            return { score, matchPercentage };
+          };
+
+          // 執行 API 搜尋
+          const searchWithKeywords = async (keywords: string[], primaryKeyword: string) => {
+            const params = new URLSearchParams();
+            params.append('search_terms', primaryKeyword);
+
+            const apiUrl = `${process.env.NEXT_PUBLIC_MULTI_APPS_SEARCH_API_URL}?${params.toString()}`;
+            const response = await fetch(apiUrl, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${process.env.NEXT_PUBLIC_MULTI_APPS_SEARCH_API_KEY}`
               }
             });
-          });
 
-          // 計算匹配度百分比
-          const totalPossibleMatches = searchKeywords.length;
-          const matchPercentage = (matchedKeywords / totalPossibleMatches) * 100;
+            if (!response.ok) {
+              throw new Error(`API 請求失敗: ${response.status}`);
+            }
 
-          return { 
-            result, 
-            score,
-            matchPercentage,
-            platform: result.link.includes('apps.apple.com') ? 'appStore' : 'playStore'
+            const data: MultiAppSearchResponse = await response.json();
+
+            // 安全檢查：確保 data.results 存在且是陣列
+            if (!data?.results || !Array.isArray(data.results)) {
+              throw new Error('API 回應格式錯誤');
+            }
+
+            const appStoreResults = data.results
+              .filter(result => result?.link?.includes('apps.apple.com'))
+              .map(result => ({
+                result,
+                ...calculateMatchScore(result, keywords)
+              }))
+              .sort((a, b) => b.score - a.score);
+
+            const playStoreResults = data.results
+              .filter(result => result?.link?.includes('play.google.com'))
+              .map(result => ({
+                result,
+                ...calculateMatchScore(result, keywords)
+              }))
+              .sort((a, b) => b.score - a.score);
+
+            return { appStoreResults, playStoreResults };
           };
-        });
 
-        // 分別找出 App Store 和 Google Play 的最佳匹配
-        const appStoreResults = scoredResults
-          .filter(({ result }) => result.link.includes('apps.apple.com'))
-          .sort((a, b) => b.score - a.score);
+          // 嘗試進階關鍵字搜尋
+          const tryAdvancedSearch = async () => {
+            const advancedKeywords = extractAdvancedKeywords(app.name);
+            const advancedPrimaryKeyword = selectPrimaryKeyword(advancedKeywords);
+            
+            console.log('進階關鍵字搜尋:', {
+              name: app.name,
+              keywords: advancedKeywords,
+              primary: advancedPrimaryKeyword
+            });
 
-        const playStoreResults = scoredResults
-          .filter(({ result }) => result.link.includes('play.google.com'))
-          .sort((a, b) => b.score - a.score);
+            return await searchWithKeywords(advancedKeywords, advancedPrimaryKeyword);
+          };
 
-        // 設定匹配閾值
-        const MATCH_THRESHOLD = 30; // 降低閾值到30%，因為我們現在的匹配更嚴格
-        
-        const bestAppStoreMatch = appStoreResults[0]?.matchPercentage >= MATCH_THRESHOLD 
-          ? appStoreResults[0].result.link : '';
-        const bestPlayStoreMatch = playStoreResults[0]?.matchPercentage >= MATCH_THRESHOLD 
-          ? playStoreResults[0].result.link : '';
+          // 先嘗試基本搜尋
+          let searchResults;
+          try {
+            const basicKeywords = extractBasicKeywords(app.name);
+            const basicPrimaryKeyword = selectPrimaryKeyword(basicKeywords);
+            
+            console.log('基本關鍵字搜尋:', {
+              name: app.name,
+              keywords: basicKeywords,
+              primary: basicPrimaryKeyword
+            });
 
-        // 如果沒有找到任何匹配，設置錯誤訊息
-        const noMatches = !bestAppStoreMatch && !bestPlayStoreMatch;
-        
-        return {
-          ...app,
-          appStoreUrl: bestAppStoreMatch,
-          playStoreUrl: bestPlayStoreMatch,
-          isLoading: false,
-          error: noMatches ? '找不到相符的應用程式' : undefined
-        };
+            searchResults = await searchWithKeywords(basicKeywords, basicPrimaryKeyword);
+          } catch (error) {
+            console.log(`基本搜尋失敗，嘗試進階搜尋: ${error}`);
+            searchResults = await tryAdvancedSearch();
+          }
+
+          const { appStoreResults, playStoreResults } = searchResults;
+
+          // 設定匹配閾值
+          const MATCH_THRESHOLD = 30;
+
+          // 如果基本搜尋的匹配度不夠，嘗試進階搜尋
+          if ((!appStoreResults[0] || appStoreResults[0].matchPercentage < MATCH_THRESHOLD) ||
+              (!playStoreResults[0] || playStoreResults[0].matchPercentage < MATCH_THRESHOLD)) {
+            console.log(`${app.name} 基本匹配失敗，嘗試進階搜尋`);
+            searchResults = await tryAdvancedSearch();
+          }
+
+          const bestAppStoreMatch = searchResults.appStoreResults.length > 0 && 
+            searchResults.appStoreResults[0].matchPercentage >= MATCH_THRESHOLD 
+              ? searchResults.appStoreResults[0].result.link 
+              : '';
+              
+          const bestPlayStoreMatch = searchResults.playStoreResults.length > 0 && 
+            searchResults.playStoreResults[0].matchPercentage >= MATCH_THRESHOLD 
+              ? searchResults.playStoreResults[0].result.link 
+              : '';
+
+          const noMatches = !bestAppStoreMatch && !bestPlayStoreMatch;
+          
+          return {
+            ...app,
+            appStoreUrl: bestAppStoreMatch,
+            playStoreUrl: bestPlayStoreMatch,
+            isLoading: false,
+            error: noMatches ? '找不到相符的應用程式' : undefined
+          };
+
+        } catch (error) {
+          console.error(`處理 ${app.name} 時發生錯誤:`, error);
+          return {
+            ...app,
+            isLoading: false,
+            error: error instanceof Error ? error.message : '搜尋 URL 時發生未知錯誤'
+          };
+        }
       }));
+
+      setSelectedApps(results);
 
     } catch (error) {
       console.error('搜尋 URL 時發生錯誤:', error);
