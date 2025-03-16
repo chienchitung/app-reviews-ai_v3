@@ -54,8 +54,8 @@ class RequestQueue {
 const requestQueue = new RequestQueue();
 
 // Hugging Face API 端點
-const SENTIMENT_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-sentiment-finetuned";
-const CATEGORY_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-multi-classification";
+const SENTIMENT_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-finetuned-sentiment";
+const CATEGORY_MODEL_API = "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-finetuned-multi-classification";
 
 // Hugging Face API 密鑰
 const HF_API_KEY = process.env.HUGGING_FACE_API_KEY || "";
