@@ -1441,14 +1441,13 @@ export default function ConversationalSearchFlow() {
                 <Progress value={scrapingProgress} className="h-2" />
                 <div className="flex justify-between text-sm">
                   <span>已完成: {scrapingProgress}%</span>
-                  <span>預計剩餘時間: {Math.ceil((100 - scrapingProgress) / 10) * 0.3} 分鐘</span>
                 </div>
 
                 <div className="space-y-2">
                   {selectedApps.map((app) => (
                     <div key={`${app.id}-progress`} className="flex items-center gap-2">
                       <Badge variant="outline" className="flex items-center gap-1">
-                        {scrapingProgress > 50 ? (
+                        {scrapingProgress >= 100 ? (
                           <CheckCircle className="h-3 w-3 text-green-500" />
                         ) : (
                           <RefreshCw className="h-3 w-3 animate-spin" />
@@ -1456,7 +1455,7 @@ export default function ConversationalSearchFlow() {
                         <span>{app.name}</span>
                       </Badge>
                       <span className="text-xs text-muted-foreground">
-                        {scrapingProgress > 50 ? "資料爬取完成" : "正在爬取資料..."}
+                        {scrapingProgress >= 100 ? "資料爬取完成" : "正在爬取資料..."}
                       </span>
                     </div>
                   ))}
@@ -1466,20 +1465,20 @@ export default function ConversationalSearchFlow() {
                   <h4 className="text-sm font-medium">爬取內容：</h4>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress > 20 ? "default" : "outline"} className={scrapingProgress > 20 ? "bg-black hover:bg-black/90 text-white" : ""}>基本資訊</Badge>
-                      {scrapingProgress > 20 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 25 ? "default" : "outline"} className={scrapingProgress >= 25 ? "bg-black hover:bg-black/90 text-white" : ""}>基本資訊</Badge>
+                      {scrapingProgress >= 25 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress > 40 ? "default" : "outline"} className={scrapingProgress > 40 ? "bg-black hover:bg-black/90 text-white" : ""}>用戶評論</Badge>
-                      {scrapingProgress > 40 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 50 ? "default" : "outline"} className={scrapingProgress >= 50 ? "bg-black hover:bg-black/90 text-white" : ""}>用戶評論</Badge>
+                      {scrapingProgress >= 50 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress > 60 ? "default" : "outline"} className={scrapingProgress > 60 ? "bg-black hover:bg-black/90 text-white" : ""}>功能列表</Badge>
-                      {scrapingProgress > 60 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 75 ? "default" : "outline"} className={scrapingProgress >= 75 ? "bg-black hover:bg-black/90 text-white" : ""}>功能列表</Badge>
+                      {scrapingProgress >= 75 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress > 80 ? "default" : "outline"} className={scrapingProgress > 80 ? "bg-black hover:bg-black/90 text-white" : ""}>更新歷史</Badge>
-                      {scrapingProgress > 80 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 100 ? "default" : "outline"} className={scrapingProgress >= 100 ? "bg-black hover:bg-black/90 text-white" : ""}>更新歷史</Badge>
+                      {scrapingProgress >= 100 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                   </div>
                 </div>
@@ -1709,7 +1708,7 @@ export default function ConversationalSearchFlow() {
             </CardHeader>
             <CardContent className="bg-white">
               <div className="space-y-4">
-                <Progress value={searchUrlProgress} className="h-2 bg-gray-100" />
+                <Progress value={searchUrlProgress} className="h-2" />
                 <div className="flex justify-between text-sm text-gray-600">
                   <span>已完成: {searchUrlProgress}%</span>
                 </div>
