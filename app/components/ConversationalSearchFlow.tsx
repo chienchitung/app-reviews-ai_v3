@@ -24,6 +24,10 @@ interface SearchResult {
   playStoreUrl?: string;
   isLoading?: boolean;
   error?: string;
+  appInfo?: {
+    ios?: AppInfo;
+    android?: AppInfo;
+  };
 }
 
 interface Message {
@@ -40,6 +44,44 @@ interface MultiAppSearchResponse {
     error?: string;
     link: string;
   }[];
+}
+
+interface AppInfo {
+  platform: string;
+  app_name: string;
+  category: string;
+  developer: string;
+  rating: string;
+  rating_count: string;
+  price: string;
+  icon_url: string;
+  version: string;
+  update_date: string;
+  ios_similar_app: string | null;
+  similarity: string | null;
+}
+
+interface ScrapingResult {
+  id: string;
+  name: string;
+  appStoreUrl?: string;
+  playStoreUrl?: string;
+  isLoading?: boolean;
+  error?: string;
+  appInfo?: {
+    ios?: AppInfo;
+    android?: AppInfo;
+  };
+}
+
+// 在文件頂部添加類型定義
+interface MatchResult {
+  score: number;
+  matchPercentage: number;
+}
+
+interface AppMatch extends MatchResult {
+  result: AppInfo;
 }
 
 const INITIAL_MESSAGE = {
@@ -97,6 +139,8 @@ export default function ConversationalSearchFlow() {
   const [apiCallInProgress, setApiCallInProgress] = useState(false);
   const [searchResultsHistory, setSearchResultsHistory] = useState<{ [key: string]: SearchResult[] }>({});
   const [currentSearchMessageIndex, setCurrentSearchMessageIndex] = useState<number | null>(null);
+  const [isSearchingUrls, setIsSearchingUrls] = useState(false);
+  const [searchUrlProgress, setSearchUrlProgress] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -579,25 +623,214 @@ export default function ConversationalSearchFlow() {
     }
   };
 
-  const startScraping = () => {
+  const startScraping = async () => {
     setCurrentStep("scraping-progress");
     setScrapingStatus("scraping");
     setScrapingProgress(0);
 
-    const interval = setInterval(() => {
-      setScrapingProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setScrapingStatus("completed");
-          setCurrentStep("scraping-complete");
-          return 100;
-        }
-        return prev + 5;
+    try {
+      // 準備 API 請求的 URLs
+      const ios_urls = selectedApps
+        .map(app => app.appStoreUrl)
+        .filter((url): url is string => !!url);
+      
+      const android_urls = selectedApps
+        .map(app => app.playStoreUrl)
+        .filter((url): url is string => !!url);
+
+      // 記錄要發送的 URLs
+      console.log('準備發送的 URLs:', { ios_urls, android_urls });
+
+      // 驗證 URLs
+      if (ios_urls.length === 0 && android_urls.length === 0) {
+        throw new Error('沒有有效的應用程式 URL');
+      }
+
+      // 開始進度指示
+      setScrapingProgress(10);
+
+      // 驗證 API URL
+      const apiUrl = process.env.NEXT_PUBLIC_APP_INFO_API_URL;
+      if (!apiUrl) {
+        throw new Error('API URL 未設定');
+      }
+
+      // 清理 API URL，移除結尾的斜線
+      const baseUrl = apiUrl.replace(/\/+$/, '');
+      
+      // 記錄實際請求的 URL
+      console.log('發送請求到:', baseUrl);
+
+      // 發送 API 請求
+      const response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          ios_urls,
+          android_urls,
+          scrape_type: 'all'
+        })
       });
-    }, 300);
+
+      if (!response.ok) {
+        throw new Error(`API 請求失敗: ${response.status}`);
+      }
+
+      setScrapingProgress(50);
+
+      const data = await response.json();
+      
+      // 驗證回應數據結構
+      if (!data || typeof data !== 'object') {
+        throw new Error('無效的回應數據');
+      }
+
+      // 初始化結果數組
+      const ios_results = Array.isArray(data.ios_results) ? data.ios_results : [];
+      const android_results = Array.isArray(data.android_results) ? data.android_results : [];
+
+      // 更新應用程式資訊
+      const updatedApps = selectedApps.map(app => {
+        try {
+          // 提取關鍵字
+          const extractKeywords = (text: string): string[] => {
+            const cleanText = text.toLowerCase()
+              .replace(/[+]/g, ' ')
+              .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, ' ');
+
+            // 分離英文和數字
+            const englishAndNumbers = cleanText.match(/[a-z0-9]+/g) || [];
+            
+            // 分離中文字
+            const chineseChars = cleanText.match(/[\u4e00-\u9fff]/g) || [];
+            
+            // 組合中文詞
+            const chinesePhrases: string[] = [];
+            for (let i = 0; i < chineseChars.length; i++) {
+              chinesePhrases.push(chineseChars[i]);
+              if (i + 1 < chineseChars.length) {
+                chinesePhrases.push(chineseChars[i] + chineseChars[i + 1]);
+              }
+              if (i + 2 < chineseChars.length) {
+                chinesePhrases.push(chineseChars[i] + chineseChars[i + 1] + chineseChars[i + 2]);
+              }
+            }
+
+            return Array.from(new Set([...englishAndNumbers, ...chinesePhrases]))
+              .filter(k => k.length >= 2)
+              .filter(k => !/^\d+$/.test(k));
+          };
+
+          const searchKeywords = extractKeywords(app.name);
+          console.log(`搜尋 ${app.name} 的關鍵字:`, searchKeywords);
+
+          // 計算匹配分數
+          const calculateMatchScore = (appInfo: AppInfo | undefined): MatchResult => {
+            if (!appInfo || !appInfo.app_name) return { score: 0, matchPercentage: 0 };
+            
+            const appNameKeywords = extractKeywords(appInfo.app_name);
+            console.log(`比對目標 ${appInfo.app_name} 的關鍵字:`, appNameKeywords);
+            
+            let score = 0;
+            const matchedKeywords = new Set<string>();
+            
+            searchKeywords.forEach((searchKeyword: string) => {
+              appNameKeywords.forEach((appNameKeyword: string) => {
+                if (searchKeyword === appNameKeyword) {
+                  score += 2;
+                  matchedKeywords.add(searchKeyword);
+                } else if (appNameKeyword.includes(searchKeyword) || searchKeyword.includes(appNameKeyword)) {
+                  score += 1;
+                  matchedKeywords.add(searchKeyword);
+                }
+              });
+            });
+
+            const matchPercentage = (matchedKeywords.size / searchKeywords.length) * 100;
+            return { score, matchPercentage };
+          };
+
+          const MATCH_THRESHOLD = 30;
+
+          // 找到最佳匹配的 iOS 結果
+          const iosMatches: AppMatch[] = ios_results
+            .map((result: AppInfo) => ({
+              result,
+              ...calculateMatchScore(result)
+            }))
+            .filter((match: AppMatch) => match.matchPercentage >= MATCH_THRESHOLD)
+            .sort((a: AppMatch, b: AppMatch) => b.score - a.score);
+
+          // 找到最佳匹配的 Android 結果
+          const androidMatches: AppMatch[] = android_results
+            .map((result: AppInfo) => ({
+              result,
+              ...calculateMatchScore(result)
+            }))
+            .filter((match: AppMatch) => match.matchPercentage >= MATCH_THRESHOLD)
+            .sort((a: AppMatch, b: AppMatch) => b.score - a.score);
+
+          console.log(`${app.name} 的匹配結果:`, {
+            ios: iosMatches.length > 0 ? {
+              name: iosMatches[0].result.app_name,
+              score: iosMatches[0].score,
+              matchPercentage: iosMatches[0].matchPercentage
+            } : '無匹配結果',
+            android: androidMatches.length > 0 ? {
+              name: androidMatches[0].result.app_name,
+              score: androidMatches[0].score,
+              matchPercentage: androidMatches[0].matchPercentage
+            } : '無匹配結果'
+          });
+
+          return {
+            ...app,
+            appInfo: {
+              ios: iosMatches.length > 0 ? iosMatches[0].result : undefined,
+              android: androidMatches.length > 0 ? androidMatches[0].result : undefined
+            }
+          };
+        } catch (error: unknown) {
+          console.error(`處理 ${app.name} 的數據時發生錯誤:`, error);
+          return {
+            ...app,
+            error: error instanceof Error ? error.message : '處理應用程式數據時發生錯誤'
+          };
+        }
+      });
+
+      setSelectedApps(updatedApps);
+      setScrapingProgress(100);
+      setScrapingStatus("completed");
+      setTimeout(() => {
+        setCurrentStep("scraping-complete");
+      }, 1000);
+
+    } catch (error) {
+      console.error('爬取應用程式資訊時發生錯誤:', error);
+      setScrapingStatus("error");
+      setSelectedApps(prev => prev.map(app => ({
+        ...app,
+        error: error instanceof Error ? error.message : '爬取資訊失敗'
+      })));
+      setScrapingProgress(0);
+      setTimeout(() => {
+        setCurrentStep("url-scraping");
+      }, 2000);
+    }
   };
 
   const proceedToAnalysis = () => {
+    // 檢查是否有已爬取的應用程式數據
+    const appsWithInfo = selectedApps.filter(app => app.appInfo);
+    console.log('Apps for analysis:', appsWithInfo);
+    if (appsWithInfo.length === 0) {
+      alert('沒有可分析的應用程式數據');
+      return;
+    }
     setCurrentStep("analysis");
   };
 
@@ -652,7 +885,6 @@ export default function ConversationalSearchFlow() {
     return Array.from(new Set(allKeywords));
   };
 
-  // 選擇主要關鍵字的邏輯也需要改進
   const selectPrimaryKeyword = (keywords: string[]): string => {
     // 如果有英文關鍵字，優先使用
     const englishKeyword = keywords.find(k => /^[a-z0-9]+$/.test(k));
@@ -667,6 +899,9 @@ export default function ConversationalSearchFlow() {
 
   const searchAppUrls = async (apps: SearchResult[]) => {
     try {
+      setIsSearchingUrls(true);
+      setSearchUrlProgress(0);
+      
       setSelectedApps(prev => prev.map(app => ({
         ...app,
         isLoading: true,
@@ -674,8 +909,12 @@ export default function ConversationalSearchFlow() {
       })));
 
       // 處理每個應用的搜尋
-      const results = await Promise.all(apps.map(async (app) => {
+      const totalApps = apps.length;
+      const results = await Promise.all(apps.map(async (app, index) => {
         try {
+          // 更新進度
+          setSearchUrlProgress(Math.round((index / totalApps) * 50));
+          
           // 基本關鍵字提取
           const extractBasicKeywords = (text: string): string[] => {
             const cleanText = text.toLowerCase()
@@ -842,7 +1081,7 @@ export default function ConversationalSearchFlow() {
 
           const noMatches = !bestAppStoreMatch && !bestPlayStoreMatch;
           
-          return {
+          const result = {
             ...app,
             appStoreUrl: bestAppStoreMatch,
             playStoreUrl: bestPlayStoreMatch,
@@ -850,6 +1089,10 @@ export default function ConversationalSearchFlow() {
             error: noMatches ? '找不到相符的應用程式' : undefined
           };
 
+          // 更新進度
+          setSearchUrlProgress(Math.round(((index + 1) / totalApps) * 100));
+          
+          return result;
         } catch (error) {
           console.error(`處理 ${app.name} 時發生錯誤:`, error);
           return {
@@ -861,6 +1104,13 @@ export default function ConversationalSearchFlow() {
       }));
 
       setSelectedApps(results);
+      setSearchUrlProgress(100);
+      
+      // 延遲關閉進度指示器
+      setTimeout(() => {
+        setIsSearchingUrls(false);
+        setSearchUrlProgress(0);
+      }, 500);
 
     } catch (error) {
       console.error('搜尋 URL 時發生錯誤:', error);
@@ -869,6 +1119,8 @@ export default function ConversationalSearchFlow() {
         isLoading: false,
         error: error instanceof Error ? error.message : '搜尋 URL 時發生未知錯誤'
       })));
+      setIsSearchingUrls(false);
+      setSearchUrlProgress(0);
     }
   };
 
@@ -972,8 +1224,21 @@ export default function ConversationalSearchFlow() {
             {Object.keys(searchResultsHistory).length > 0 && (
               <Card className="mb-6">
                 <CardHeader>
-                  <CardTitle>搜尋結果</CardTitle>
-                  <CardDescription>選擇要分析的應用程式 (最多3個) {new Set(selectedApps.map(app => app.name)).size}/3</CardDescription>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <CardTitle>搜尋結果</CardTitle>
+                      <CardDescription>選擇要分析的應用程式 (最多3個) {new Set(selectedApps.map(app => app.name)).size}/3</CardDescription>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={clearAllSelections}
+                      className="border-black text-black hover:bg-black/10"
+                      disabled={selectedApps.length === 0}
+                    >
+                      取消全選
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="max-h-[400px] overflow-y-auto">
@@ -1007,7 +1272,11 @@ export default function ConversationalSearchFlow() {
                   </div>
                 </CardContent>
                 <CardFooter className="flex justify-end">
-                  <Button onClick={() => handleStepChange("url-scraping")} disabled={selectedApps.length === 0} className="bg-black hover:bg-black/90 text-white">
+                  <Button 
+                    onClick={() => handleStepChange("url-scraping")} 
+                    disabled={selectedApps.length === 0} 
+                    className="bg-black hover:bg-black/90 text-white"
+                  >
                     自動查找應用商店連結
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
@@ -1033,6 +1302,24 @@ export default function ConversationalSearchFlow() {
               </div>
             </CardHeader>
             <CardContent>
+              <Alert className="mb-4 bg-yellow-50 border-yellow-200">
+                <AlertTitle className="text-yellow-800 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                  注意事項
+                </AlertTitle>
+                <AlertDescription className="text-yellow-700">
+                  <ul className="list-disc list-inside space-y-1 mt-2">
+                    <li>如果應用程式名稱與您搜尋的不符，建議返回第一步重新搜尋正確名稱</li>
+                    <li>部分應用可能只存在於其中一個應用商店，請確認連結的正確性</li>
+                    <li>您可以手動修改或輸入正確的應用商店連結</li>
+                  </ul>
+                </AlertDescription>
+              </Alert>
+
               <div className="space-y-6">
                 {selectedApps.map((app) => (
                   <div key={`${app.id}-url`} className="border rounded-lg p-4">
@@ -1079,22 +1366,26 @@ export default function ConversationalSearchFlow() {
                             )}
                           </Button>
                         </div>
+                        {!app.appStoreUrl && !app.isLoading && (
+                          <p className="text-sm text-gray-500">找不到App Store連結，建議手動搜尋或確認應用是否存在</p>
+                        )}
                       </TabsContent>
 
                       <TabsContent value="playstore" className="space-y-4">
                         <div className="flex gap-2">
                           <Input
                             type="text"
-                            placeholder="正在查找Google Play URL..."
+                            placeholder={app.isLoading ? "正在查找Google Play URL..." : "Google Play URL"}
                             value={app.playStoreUrl || ""}
                             onChange={(e) => handleUrlInput(app.id, "playStore", e.target.value)}
                             className={app.playStoreUrl ? "border-green-500" : ""}
+                            disabled={app.isLoading}
                           />
                           <Button
                             variant="outline"
                             onClick={() => copyToClipboard(app.id, "playStore", app.playStoreUrl || "")}
                             className="border-black hover:bg-black/10"
-                            disabled={!app.playStoreUrl}
+                            disabled={!app.playStoreUrl || app.isLoading}
                           >
                             {copySuccess[app.id]?.playStore ? (
                               <Check className="h-4 w-4 text-green-500" />
@@ -1103,16 +1394,24 @@ export default function ConversationalSearchFlow() {
                             )}
                           </Button>
                         </div>
+                        {!app.playStoreUrl && !app.isLoading && (
+                          <p className="text-sm text-gray-500">找不到Google Play連結，建議手動搜尋或確認應用是否存在</p>
+                        )}
                       </TabsContent>
                     </Tabs>
                   </div>
                 ))}
               </div>
             </CardContent>
-            <CardFooter className="flex justify-end">
+            <CardFooter className="flex justify-between items-center">
+              <p className="text-sm text-gray-500">
+                {selectedApps.some(app => !app.appStoreUrl && !app.playStoreUrl) 
+                  ? "提醒：部分應用程式未找到任何商店連結" 
+                  : "已找到可用的應用商店連結"}
+              </p>
               <Button 
                 onClick={startScraping} 
-                disabled={selectedApps.some(app => !app.appStoreUrl || !app.playStoreUrl || app.isLoading)}
+                disabled={selectedApps.every(app => !app.appStoreUrl && !app.playStoreUrl) || selectedApps.some(app => app.isLoading)}
                 className="bg-black hover:bg-black/90 text-white"
               >
                 開始爬取應用數據
@@ -1212,19 +1511,88 @@ export default function ConversationalSearchFlow() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-6">
                   {selectedApps.map((app) => (
-                    <Card key={`${app.id}-summary`}>
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center">
-                          <CardTitle className="text-lg">{app.name}</CardTitle>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span>狀態:</span>
-                            <span className="font-medium">已完成分析</span>
+                    <Card key={`${app.id}-summary`} className="overflow-hidden border-2">
+                      <CardContent className="p-6">
+                        <div className="flex flex-col md:flex-row gap-6">
+                          {/* 應用程式基本信息 */}
+                          <div className="flex items-start gap-4 md:w-1/3">
+                            {(app.appInfo?.ios?.icon_url || app.appInfo?.android?.icon_url) && (
+                              <img 
+                                src={app.appInfo?.ios?.icon_url || app.appInfo?.android?.icon_url} 
+                                alt={app.name} 
+                                className="w-24 h-24 rounded-xl object-cover flex-shrink-0"
+                              />
+                            )}
+                            <div>
+                              <h3 className="text-xl font-semibold mb-1">{app.name}</h3>
+                              <p className="text-gray-600 mb-2">
+                                {app.appInfo?.ios?.developer || app.appInfo?.android?.developer}
+                              </p>
+                              <Badge variant="outline" className="text-sm">
+                                {app.appInfo?.ios?.category || app.appInfo?.android?.category}
+                              </Badge>
+                            </div>
+                          </div>
+
+                          {/* 評分和版本信息 */}
+                          <div className="grid md:grid-cols-2 gap-6 md:w-2/3">
+                            {/* App Store 信息 */}
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="text-sm font-medium text-gray-500 mb-3">App Store</h4>
+                              <div className="space-y-3">
+                                <div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <svg className="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                    </svg>
+                                    <span className="text-xl font-semibold">
+                                      {app.appInfo?.ios?.rating || 'N/A'}
+                                    </span>
+                                    <span className="text-gray-500">
+                                      ({app.appInfo?.ios?.rating_count || '0'} 評分)
+                                    </span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-sm text-gray-500">版本</p>
+                                  <p className="font-medium">{app.appInfo?.ios?.version || 'N/A'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-sm text-gray-500">更新日期</p>
+                                  <p className="font-medium">{app.appInfo?.ios?.update_date || 'N/A'}</p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Google Play 信息 */}
+                            <div className="bg-gray-50 rounded-lg p-4">
+                              <h4 className="text-sm font-medium text-gray-500 mb-3">Google Play</h4>
+                              <div className="space-y-3">
+                                <div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <svg className="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
+                                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                    </svg>
+                                    <span className="text-xl font-semibold">
+                                      {app.appInfo?.android?.rating || 'N/A'}
+                                    </span>
+                                    <span className="text-gray-500">
+                                      ({app.appInfo?.android?.rating_count || '0'} 評分)
+                                    </span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <p className="text-sm text-gray-500">版本</p>
+                                  <p className="font-medium">{app.appInfo?.android?.version || 'N/A'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-sm text-gray-500">更新日期</p>
+                                  <p className="font-medium">{app.appInfo?.android?.update_date || 'N/A'}</p>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </CardContent>
@@ -1243,12 +1611,39 @@ export default function ConversationalSearchFlow() {
         );
 
       case "analysis":
+        // 傳遞所有已爬取數據的應用程式
+        const appsForAnalysis = selectedApps.filter(app => app.appInfo);
+        console.log('Rendering analysis with all apps:', appsForAnalysis);
         return (
           <>
-            <CompetitiveAnalysis onGoBack={() => setCurrentStep("scraping-complete")} />
+            <CompetitiveAnalysis 
+              selectedApps={appsForAnalysis}
+              onGoBack={() => setCurrentStep("scraping-complete")} 
+            />
           </>
         );
     }
+  };
+
+  // 添加取消全選函數
+  const clearAllSelections = () => {
+    setSearchResults(prevResults =>
+      prevResults.map(app => ({
+        ...app,
+        selected: false
+      }))
+    );
+    setSelectedApps([]);
+    setSearchResultsHistory(prev => {
+      const newHistory = { ...prev };
+      Object.keys(newHistory).forEach(key => {
+        newHistory[key] = newHistory[key].map(historyApp => ({
+          ...historyApp,
+          selected: false
+        }));
+      });
+      return newHistory;
+    });
   };
 
   return (
@@ -1304,6 +1699,42 @@ export default function ConversationalSearchFlow() {
       )}
 
       {renderStep()}
+
+      {isSearchingUrls && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-[90%] max-w-md bg-white">
+            <CardHeader className="bg-white">
+              <CardTitle className="text-gray-900">正在查找應用商店連結</CardTitle>
+              <CardDescription className="text-gray-600">請稍候，正在搜尋並匹配應用程式資訊...</CardDescription>
+            </CardHeader>
+            <CardContent className="bg-white">
+              <div className="space-y-4">
+                <Progress value={searchUrlProgress} className="h-2 bg-gray-100" />
+                <div className="flex justify-between text-sm text-gray-600">
+                  <span>已完成: {searchUrlProgress}%</span>
+                </div>
+                <div className="space-y-2">
+                  {selectedApps.map((app) => (
+                    <div key={`${app.id}-search-progress`} className="flex items-center gap-2">
+                      <Badge variant="outline" className="flex items-center gap-1 bg-white border-gray-200">
+                        {app.isLoading ? (
+                          <RefreshCw className="h-3 w-3 text-blue-500 animate-spin" />
+                        ) : (
+                          <CheckCircle className="h-3 w-3 text-green-500" />
+                        )}
+                        <span className="text-gray-700">{app.name}</span>
+                      </Badge>
+                      <span className="text-xs text-gray-500">
+                        {app.isLoading ? "正在搜尋..." : "搜尋完成"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 } 
