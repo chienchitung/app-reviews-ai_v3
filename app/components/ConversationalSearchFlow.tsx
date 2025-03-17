@@ -46,6 +46,30 @@ interface MultiAppSearchResponse {
   }[];
 }
 
+interface ReviewData {
+  app_id: string;
+  reviews: Array<{
+    date: string;
+    username: string;
+    review: string;
+    rating: number;
+    platform: string;
+    developerResponse?: string;
+    language: string;
+    app_id: string;
+    sentiment: string;
+    category: string[];
+    keywords: string[];
+    word_scores: Array<{ word: string; score: number }>;
+    tfidf_matrix: Array<{ term: string; score: number }>;
+  }>;
+}
+
+interface ProcessedReviews {
+  ios?: ReviewData;
+  android?: ReviewData;
+}
+
 interface AppInfo {
   platform: string;
   app_name: string;
@@ -652,20 +676,24 @@ export default function ConversationalSearchFlow() {
       // 驗證 API URLs
       const appInfoApiUrl = process.env.NEXT_PUBLIC_APP_INFO_API_URL;
       const reviewsApiUrl = process.env.NEXT_PUBLIC_MULTI_APPS_SCRAPER_API_URL;
-      const HUGGING_FACE_API_KEY = process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY;
-      const CHINESE_API_URL = process.env.NEXT_PUBLIC_CHINESE_API_URL;
-      const ENGLISH_API_URL = process.env.NEXT_PUBLIC_ENGLISH_API_URL;
+      const huggingFaceApiKey = process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY;
+      const chineseApiUrl = process.env.NEXT_PUBLIC_CHINESE_API_URL;
+      const englishApiUrl = process.env.NEXT_PUBLIC_ENGLISH_API_URL;
       
       console.log('API URLs:', {
         appInfoApiUrl,
         reviewsApiUrl,
-        HUGGING_FACE_API_KEY: HUGGING_FACE_API_KEY ? '已設置' : '未設置',
-        CHINESE_API_URL,
-        ENGLISH_API_URL
+        huggingFaceApiKey: huggingFaceApiKey ? '已設置' : '未設置',
+        chineseApiUrl,
+        englishApiUrl
       });
 
       if (!appInfoApiUrl || !reviewsApiUrl) {
         throw new Error('API URL 未設定');
+      }
+
+      if (!huggingFaceApiKey || !chineseApiUrl || !englishApiUrl) {
+        console.warn('部分 API 配置未設置，可能影響評論分析功能');
       }
 
       // 清理 API URLs，移除結尾的斜線
@@ -837,220 +865,75 @@ export default function ConversationalSearchFlow() {
             const appStoreId = app.appStoreUrl?.match(/id(\d+)/)?.[1];
             const playStoreId = app.playStoreUrl?.match(/id=([^&]+)/)?.[1];
 
-            console.log('尋找評論數據:', {
-              appName: app.name,
+            console.log('App URLs and IDs:', {
+              name: app.name,
+              appStoreUrl: app.appStoreUrl,
+              playStoreUrl: app.playStoreUrl,
               appStoreId,
               playStoreId
             });
 
-            const iosReviews = reviewsData.ios_reviews?.find(
-              (review: any) => review.app_id === appStoreId
-            );
-            const androidReviews = reviewsData.android_reviews?.find(
-              (review: any) => review.app_id === playStoreId
-            );
-
-            console.log('找到的評論數據:', {
-              appName: app.name,
-              iosReviewsCount: iosReviews?.length || 0,
-              androidReviewsCount: androidReviews?.length || 0
+            console.log('Reviews API Response:', {
+              fullResponse: reviewsData,
+              data: reviewsData.data,
+              success: reviewsData.success
             });
 
-            // 處理評論的情感分析、分類標記和斷詞
-            const processReviews = async (reviews: any[]) => {
-              if (!reviews || reviews.length === 0) return [];
-              
-              console.log('開始處理評論批次，總評論數:', reviews.length);
-              const batchSize = 5; // 每批處理5條評論
-              const processedReviews = [];
-              
-              for (let i = 0; i < reviews.length; i += batchSize) {
-                const batch = reviews.slice(i, i + batchSize);
-                console.log(`處理第 ${Math.floor(i/batchSize) + 1} 批評論，本批數量: ${batch.length}`);
-                
-                const batchPromises = batch.map(async (review) => {
-                  try {
-                    // 檢查必要的API配置
-                    if (!process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY) {
-                      throw new Error('API 金鑰未設置');
-                    }
-
-                    console.log('處理評論:', {
-                      review: review.review,
-                      language: review.language,
-                      platform: review.platform,
-                      date: review.date,
-                      username: review.username,
-                      rating: review.rating,
-                      app_id: review.app_id
-                    });
-
-                    // 情感分析請求
-                    const sentimentResponse = await fetch(
-                      "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-sentiment-finetuned",
-                      {
-                        method: "POST",
-                        headers: {
-                          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY}`,
-                          "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify({ inputs: review.review })
-                      }
-                    );
-                    
-                    const sentimentResult = await sentimentResponse.json();
-                    console.log('情感分析響應:', sentimentResult);
-
-                    // 分類標記請求
-                    const categoryResponse = await fetch(
-                      "https://api-inference.huggingface.co/models/jackietung/bert-base-chinese-multi-classification",
-                      {
-                        method: "POST",
-                        headers: {
-                          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY}`,
-                          "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify({ inputs: review.review })
-                      }
-                    );
-                    
-                    const categoryResult = await categoryResponse.json();
-                    console.log('分類響應:', categoryResult);
-
-                    // 斷詞API請求
-                    const segmentationApiUrl = review.language === 'zh' 
-                      ? process.env.NEXT_PUBLIC_CHINESE_API_URL 
-                      : process.env.NEXT_PUBLIC_ENGLISH_API_URL;
-                    
-                    if (!segmentationApiUrl) {
-                      throw new Error('斷詞 API URL 未設置');
-                    }
-
-                    const segmentationResponse = await fetch(
-                      segmentationApiUrl,
-                      {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/json",
-                          "Authorization": `Bearer ${review.language === 'zh' 
-                            ? process.env.NEXT_PUBLIC_CHINESE_API_KEY 
-                            : process.env.NEXT_PUBLIC_ENGLISH_API_KEY}`
-                        },
-                        body: JSON.stringify({ text: review.review, top_n: 10 })
-                      }
-                    );
-
-                    const segmentationResult = await segmentationResponse.json();
-                    console.log('斷詞響應:', segmentationResult);
-
-                    // 處理情感分析結果
-                    let sentiment = '中性';
-                    let sentimentConfidence = 0;
-                    if (Array.isArray(sentimentResult) && sentimentResult.length > 0) {
-                      console.log('處理情感分析結果:', sentimentResult[0]);
-                      const highestScore = sentimentResult[0].reduce((prev: any, current: any) => 
-                        (prev.score > current.score) ? prev : current
-                      );
-                      sentiment = highestScore.label;
-                      sentimentConfidence = highestScore.score;
-                    }
-
-                    // 處理分類結果
-                    let categories = ['一般'];
-                    let categoryConfidence = 0;
-                    if (Array.isArray(categoryResult) && categoryResult.length > 0) {
-                      console.log('處理分類結果:', categoryResult[0]);
-                      const highestScore = categoryResult[0].reduce((prev: any, current: any) => 
-                        (prev.score > current.score) ? prev : current
-                      );
-                      categories = [highestScore.label];
-                      categoryConfidence = highestScore.score;
-                    }
-
-                    // 處理斷詞結果
-                    const keywords = segmentationResult.keywords || [];
-                    console.log('處理後的關鍵詞:', keywords);
-
-                    // 返回完整的評論數據結構
-                    const processedReview = {
-                      // 原始評論數據
-                      date: review.date,
-                      username: review.username,
-                      review: review.review,
-                      rating: review.rating,
-                      platform: review.platform,
-                      developerResponse: review.developerResponse || "",
-                      language: review.language,
-                      app_id: review.app_id,
-                      
-                      // 分析結果
-                      sentiment: {
-                        label: sentiment,
-                        confidence: sentimentConfidence
-                      },
-                      category: {
-                        labels: categories,
-                        confidence: categoryConfidence
-                      },
-                      keywords: keywords
-                    };
-
-                    console.log('處理完成的評論:', processedReview);
-                    return processedReview;
-
-                  } catch (err) {
-                    console.error(`處理評論時發生錯誤:`, {
-                      error: err,
-                      review: review.review,
-                      language: review.language
-                    });
-                    
-                    // 發生錯誤時返回原始數據加上默認的分析結果
-                    return {
-                      // 保留原始評論數據
-                      date: review.date,
-                      username: review.username,
-                      review: review.review,
-                      rating: review.rating,
-                      platform: review.platform,
-                      developerResponse: review.developerResponse || "",
-                      language: review.language,
-                      app_id: review.app_id,
-                      
-                      // 默認分析結果
-                      sentiment: {
-                        label: '中性',
-                        confidence: 0
-                      },
-                      category: {
-                        labels: ['一般'],
-                        confidence: 0
-                      },
-                      keywords: []
-                    };
-                  }
-                });
-
-                const batchResults = await Promise.all(batchPromises);
-                console.log(`第 ${Math.floor(i/batchSize) + 1} 批評論處理完成，結果:`, batchResults);
-                processedReviews.push(...batchResults);
-
-                // 批次之間添加延遲
-                if (i + batchSize < reviews.length) {
-                  console.log('等待下一批處理...');
-                  await new Promise<void>((resolve) => setTimeout(resolve, 1000));
-                }
-              }
-
-              console.log('所有評論處理完成，總結果數:', processedReviews.length);
-              return processedReviews;
+            // 處理評論數據
+            const processedReviews: ProcessedReviews = {
+              ios: undefined,
+              android: undefined
             };
 
-            // 同步處理所有平台的評論
-            const [processedIosReviews, processedAndroidReviews] = await Promise.all([
-              processReviews(iosReviews || []),
-              processReviews(androidReviews || [])
-            ]);
+            // 處理 iOS 評論
+            if (reviewsData.data?.ios) {
+              const iosReviews = reviewsData.data.ios[app.appStoreUrl || ''];
+              if (Array.isArray(iosReviews)) {
+                processedReviews.ios = {
+                  app_id: appStoreId || '',
+                  reviews: await processReviews(iosReviews)
+                };
+              }
+            }
+
+            // 處理 Android 評論
+            if (reviewsData.data?.android) {
+              const androidReviews = reviewsData.data.android[app.playStoreUrl || ''];
+              if (Array.isArray(androidReviews)) {
+                processedReviews.android = {
+                  app_id: playStoreId || '',
+                  reviews: await processReviews(androidReviews)
+                };
+              }
+            }
+
+            console.log('Reviews Data Structure:', {
+              rawData: reviewsData.data,
+              iosData: reviewsData.data?.ios,
+              androidData: reviewsData.data?.android,
+              processedIosReviews: processedReviews.ios,
+              processedAndroidReviews: processedReviews.android
+            });
+
+            console.log('Found Reviews:', {
+              appName: app.name,
+              appStoreId,
+              playStoreId,
+              iosReviews: processedReviews.ios ? {
+                app_id: processedReviews.ios.app_id,
+                reviewCount: processedReviews.ios.reviews?.length || 0
+              } : 'No iOS reviews found',
+              androidReviews: processedReviews.android ? {
+                app_id: processedReviews.android.app_id,
+                reviewCount: processedReviews.android.reviews?.length || 0
+              } : 'No Android reviews found'
+            });
+
+            // 使用處理後的評論數據進行後續操作
+            const [processedIosReviews, processedAndroidReviews] = [
+              processedReviews.ios?.reviews || [],
+              processedReviews.android?.reviews || []
+            ];
 
             setScrapingProgress(75); // 更新進度到75%
 
@@ -1922,6 +1805,229 @@ export default function ConversationalSearchFlow() {
       });
       return newHistory;
     });
+  };
+
+  // 處理評論的情感分析、分類標記和斷詞
+  const processReviews = async (reviews: ReviewData['reviews'] = []): Promise<ReviewData['reviews']> => {
+    try {
+      console.log('開始處理評論，輸入數據:', {
+        hasReviews: !!reviews,
+        reviewsLength: reviews?.length,
+        reviewsType: typeof reviews,
+        sampleReview: reviews?.[0]
+      });
+
+      if (!reviews || !Array.isArray(reviews) || reviews.length === 0) {
+        console.log('沒有評論數據需要處理或數據格式不正確');
+        return [{
+          date: new Date().toISOString(),
+          username: "未知用戶",
+          review: "無評論內容",
+          rating: 0,
+          platform: "unknown",
+          developerResponse: "",
+          language: "zh",
+          app_id: "",
+          sentiment: "未標記",
+          category: ["未標記"],
+          keywords: ["無關鍵詞"],
+          word_scores: [],
+          tfidf_matrix: []
+        }];
+      }
+
+      console.log('開始處理評論批次，總評論數:', reviews.length);
+      const batchSize = 5;
+      const processedReviews: ReviewData['reviews'] = [];
+      
+      // 檢查 API 配置
+      const chineseApiUrl = process.env.NEXT_PUBLIC_CHINESE_API_URL || "https://chinese-nlp-api.onrender.com/api/v1/keywords";
+      const englishApiUrl = process.env.NEXT_PUBLIC_ENGLISH_API_URL || "https://english-nlp-api.onrender.com/api/v1/keywords";
+      const chineseApiKey = process.env.NEXT_PUBLIC_CHINESE_API_KEY;
+      const englishApiKey = process.env.NEXT_PUBLIC_ENGLISH_API_KEY;
+
+      console.log('API 配置檢查:', {
+        chineseApiUrl: chineseApiUrl ? '已設置' : '未設置',
+        englishApiUrl: englishApiUrl ? '已設置' : '未設置',
+        chineseApiKey: chineseApiKey ? '已設置' : '未設置',
+        englishApiKey: englishApiKey ? '已設置' : '未設置'
+      });
+      
+      for (let i = 0; i < reviews.length; i += batchSize) {
+        try {
+          const batch = reviews.slice(i, i + batchSize);
+          console.log(`處理第 ${Math.floor(i/batchSize) + 1} 批評論，本批數量: ${batch.length}`);
+          
+          const batchPromises = batch.map(async (review) => {
+            try {
+              if (!review || typeof review !== 'object') {
+                console.error('無效的評論數據:', review);
+                throw new Error('無效的評論數據格式');
+              }
+
+              const processedReview: ReviewData['reviews'][0] = {
+                date: review.date || new Date().toISOString(),
+                username: review.username || "未知用戶",
+                review: review.review || "無評論內容",
+                rating: review.rating || 0,
+                platform: review.platform || "unknown",
+                developerResponse: review.developerResponse || "",
+                language: review.language || "zh",
+                app_id: review.app_id || "",
+                sentiment: "未標記",
+                category: ["未標記"],
+                keywords: ["無關鍵詞"],
+                word_scores: [],
+                tfidf_matrix: []
+              };
+
+              // 如果評論內容為空，直接返回預設值
+              if (!processedReview.review || processedReview.review.trim() === '') {
+                console.log('評論內容為空，跳過關鍵詞提取');
+                return processedReview;
+              }
+
+              try {
+                // 關鍵詞提取請求
+                const segmentationApiUrl = processedReview.language === 'zh' 
+                  ? chineseApiUrl 
+                  : englishApiUrl;
+                
+                const apiKey = processedReview.language === 'zh'
+                  ? chineseApiKey
+                  : englishApiKey;
+
+                if (!segmentationApiUrl || !apiKey) {
+                  console.error(`${processedReview.language === 'zh' ? '中文' : '英文'}斷詞 API 配置未完整設置`);
+                  return processedReview;
+                }
+
+                console.log('發送關鍵詞提取請求...', {
+                  url: segmentationApiUrl,
+                  language: processedReview.language,
+                  reviewLength: processedReview.review.length,
+                  reviewPreview: processedReview.review.substring(0, 50) + '...'
+                });
+
+                const requestBody = {
+                  text: processedReview.review.trim(),
+                  top_n: 10
+                };
+
+                const segmentationResponse = await fetch(
+                  segmentationApiUrl,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Authorization": `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify(requestBody)
+                  }
+                );
+
+                if (!segmentationResponse.ok) {
+                  const errorText = await segmentationResponse.text();
+                  console.error('關鍵詞提取API錯誤:', {
+                    status: segmentationResponse.status,
+                    statusText: segmentationResponse.statusText,
+                    error: errorText,
+                    requestBody
+                  });
+                  return processedReview;
+                }
+
+                const segmentationResult = await segmentationResponse.json();
+                console.log('關鍵詞提取API回應:', {
+                  status: segmentationResponse.status,
+                  resultType: typeof segmentationResult,
+                  isArray: Array.isArray(segmentationResult),
+                  hasKeywords: segmentationResult?.keywords?.length > 0,
+                  data: segmentationResult
+                });
+
+                // 處理中文格式
+                if (Array.isArray(segmentationResult)) {
+                  processedReview.keywords = segmentationResult.flatMap(result => result.keywords || []);
+                  processedReview.word_scores = segmentationResult.flatMap(result => result.word_scores || []).map(score => ({
+                    word: String(score.word || ''),
+                    score: Number(score.score || 0)
+                  }));
+                } 
+                // 處理英文格式
+                else if (segmentationResult.keywords) {
+                  processedReview.keywords = segmentationResult.keywords;
+                  processedReview.word_scores = segmentationResult.scores.map((score: number, index: number) => ({
+                    word: segmentationResult.keywords[index],
+                    score: score
+                  }));
+                }
+
+                // 如果沒有找到關鍵詞，使用本地提取
+                if (!processedReview.keywords || processedReview.keywords.length === 0) {
+                  console.log('API未返回關鍵詞，使用本地提取');
+                  processedReview.keywords = extractKeywords(processedReview.review);
+                }
+
+              } catch (error) {
+                console.error('關鍵詞提取失敗:', error);
+                // 使用本地提取作為備選方案
+                processedReview.keywords = extractKeywords(processedReview.review);
+              }
+
+              return processedReview;
+            } catch (error) {
+              console.error('處理單個評論時發生錯誤:', error);
+              return {
+                date: new Date().toISOString(),
+                username: "未知用戶",
+                review: "處理失敗的評論",
+                rating: 0,
+                platform: "unknown",
+                developerResponse: "",
+                language: "zh",
+                app_id: "",
+                sentiment: "未標記",
+                category: ["未標記"],
+                keywords: ["無關鍵詞"],
+                word_scores: [],
+                tfidf_matrix: []
+              };
+            }
+          });
+          
+          const batchResults = await Promise.all(batchPromises);
+          processedReviews.push(...batchResults);
+          
+          // 添加延遲以避免 API 限制
+          if (i + batchSize < reviews.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (error) {
+          console.error('處理評論批次時發生錯誤:', error);
+          continue;
+        }
+      }
+
+      return processedReviews;
+    } catch (error) {
+      console.error('處理評論時發生錯誤:', error);
+      return [{
+        date: new Date().toISOString(),
+        username: "未知用戶",
+        review: "處理失敗",
+        rating: 0,
+        platform: "unknown",
+        developerResponse: "",
+        language: "zh",
+        app_id: "",
+        sentiment: "未標記",
+        category: ["未標記"],
+        keywords: ["無關鍵詞"],
+        word_scores: [],
+        tfidf_matrix: []
+      }];
+    }
   };
 
   return (
