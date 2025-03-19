@@ -39,6 +39,11 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
+                <Link href="/competitor-analysis" className="text-gray-400 hover:text-white text-sm">
+                  {t('features.competitorAnalysis')}
+                </Link>
+              </li>
+              <li>
                 <Link href="/learn" className="text-gray-400 hover:text-white text-sm">
                   {t('nav.learningCenter')}
                 </Link>

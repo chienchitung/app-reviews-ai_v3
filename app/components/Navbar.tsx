@@ -20,6 +20,7 @@ const LogoSVG = () => (
 const productCategories = [
   { title: 'features.reviewAnalysis', link: '/analysis' },
   { title: 'features.dataScraping', link: '/scraper' },
+  { title: 'features.competitorAnalysis', link: '/competitor-analysis' },
   { title: 'nav.pricing', link: '/pricing' },
   { title: 'nav.learningCenter', link: '/learn' },
 ];
@@ -140,15 +141,6 @@ export default function Navbar({}: NavbarProps) {
                   <Globe className="h-5 w-5 mr-2" />
                   <span>{language === 'zh' ? 'English' : '中文'}</span>
                 </button>
-              </li>
-              <li className="pt-4 border-t">
-                <Link
-                  href="/competitor-analysis"
-                  className="block px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-100 rounded-md mt-2"
-                >
-                  {t('features.competitorAnalysis')}
-                  <p className="text-xs text-gray-500 font-normal">{t('features.competitorAnalysis.desc')}</p>
-                </Link>
               </li>
             </ul>
           </nav>
