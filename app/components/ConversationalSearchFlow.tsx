@@ -1843,223 +1843,268 @@ export default function ConversationalSearchFlow() {
         }];
       }
 
-      console.log('開始處理評論批次，總評論數:', reviews.length);
-      const batchSize = 5;
+      // 限制處理前10筆評論
+      const limitedReviews = reviews.slice(0, 10);
+      console.log(`限制處理前10筆評論，實際處理數量: ${limitedReviews.length}`);
+
       const processedReviews: ReviewData['reviews'] = [];
       
       // 檢查 API 配置
-      const chineseApiUrl = process.env.NEXT_PUBLIC_CHINESE_API_URL || "https://chinese-nlp-api.onrender.com/api/v1/keywords";
-      const englishApiUrl = process.env.NEXT_PUBLIC_ENGLISH_API_URL || "https://english-nlp-api.onrender.com/api/v1/keywords";
-      const chineseApiKey = process.env.NEXT_PUBLIC_CHINESE_API_KEY;
-      const englishApiKey = process.env.NEXT_PUBLIC_ENGLISH_API_KEY;
+      const chineseApiUrl = process.env.NEXT_PUBLIC_CHINESE_API_URL;
+      const englishApiUrl = process.env.NEXT_PUBLIC_ENGLISH_API_URL;
+      const huggingFaceApiKey = process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY;
 
       console.log('API 配置檢查:', {
         chineseApiUrl: chineseApiUrl ? '已設置' : '未設置',
         englishApiUrl: englishApiUrl ? '已設置' : '未設置',
-        chineseApiKey: chineseApiKey ? '已設置' : '未設置',
-        englishApiKey: englishApiKey ? '已設置' : '未設置'
+        huggingFaceApiKey: huggingFaceApiKey ? '已設置' : '未設置'
       });
+
+      // 情感分析和分類API的URL
+      const sentimentApiUrl = "https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-sentiment";
+      const classificationApiUrl = "https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-multi-classification";
       
-      for (let i = 0; i < reviews.length; i += batchSize) {
+      for (const review of limitedReviews) {
         try {
-          const batch = reviews.slice(i, i + batchSize);
-          console.log(`處理第 ${Math.floor(i/batchSize) + 1} 批評論，本批數量: ${batch.length}`);
-          
-          const batchPromises = batch.map(async (review) => {
-            try {
-              if (!review || typeof review !== 'object') {
-                console.error('無效的評論數據:', review);
-                throw new Error('無效的評論數據格式');
-              }
+          if (!review || typeof review !== 'object') {
+            console.error('無效的評論數據:', review);
+            throw new Error('無效的評論數據格式');
+          }
 
-              const processedReview: ReviewData['reviews'][0] = {
-                date: review.date || new Date().toISOString(),
-                username: review.username || "未知用戶",
-                review: review.review || "無評論內容",
-                rating: review.rating || 0,
-                platform: review.platform || "unknown",
-                developerResponse: review.developerResponse || "",
-                language: review.language || "zh",
-                app_id: review.app_id || "",
-                sentiment: "未標記",
-                category: ["未標記"],
-                keywords: ["無關鍵詞"],
-                word_scores: [],
-                tfidf_matrix: []
-              };
+          const processedReview: ReviewData['reviews'][0] = {
+            date: review.date || new Date().toISOString(),
+            username: review.username || "未知用戶",
+            review: review.review || "無評論內容",
+            rating: review.rating || 0,
+            platform: review.platform || "unknown",
+            developerResponse: review.developerResponse || "",
+            language: review.language || "zh",
+            app_id: review.app_id || "",
+            sentiment: "未標記",
+            category: ["未標記"],
+            keywords: ["無關鍵詞"],
+            word_scores: [],
+            tfidf_matrix: []
+          };
 
-              // 如果評論內容為空或無效，直接返回預設值
-              if (!processedReview.review || 
-                  processedReview.review.trim() === '' || 
-                  !isValidReviewContent(processedReview.review)) {
-                console.log('評論內容為空或無效（可能只包含表情符號），跳過關鍵詞提取');
-                processedReview.keywords = ["無有效內容"];
-                processedReview.word_scores = [{
-                  word: "無有效內容",
-                  score: 1.0
-                }];
-                return processedReview;
-              }
+          // 如果評論內容為空或無效，跳過處理
+          if (!processedReview.review || 
+              processedReview.review.trim() === '' || 
+              !isValidReviewContent(processedReview.review)) {
+            console.log('評論內容為空或無效，跳過處理');
+            processedReviews.push(processedReview);
+            continue;
+          }
 
-              try {
-                // 關鍵詞提取請求
-                const segmentationApiUrl = processedReview.language === 'zh' 
-                  ? chineseApiUrl 
-                  : englishApiUrl;
-                
-                const apiKey = processedReview.language === 'zh'
-                  ? chineseApiKey
-                  : englishApiKey;
+          // 1. 情感分析
+          try {
+            console.log('開始情感分析:', {
+              reviewPreview: processedReview.review.substring(0, 50) + '...'
+            });
 
-                if (!segmentationApiUrl || !apiKey) {
-                  throw new Error(`${processedReview.language === 'zh' ? '中文' : '英文'}斷詞 API 配置未完整設置`);
-                }
+            // 添加延遲以避免 API 限制
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
-                console.log('發送關鍵詞提取請求...', {
-                  url: segmentationApiUrl,
-                  language: processedReview.language,
-                  reviewLength: processedReview.review.length,
-                  reviewPreview: processedReview.review.substring(0, 50) + '...',
-                  hasApiKey: !!apiKey
+            const sentimentResponse = await fetch(sentimentApiUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${huggingFaceApiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                inputs: processedReview.review
+              })
+            });
+
+            if (sentimentResponse.ok) {
+              const sentimentResult = await sentimentResponse.json();
+              if (Array.isArray(sentimentResult) && sentimentResult.length > 0 && 
+                  Array.isArray(sentimentResult[0]) && sentimentResult[0].length > 0) {
+                processedReview.sentiment = sentimentResult[0][0].label;
+                console.log('情感分析結果:', {
+                  review: processedReview.review.substring(0, 50) + '...',
+                  sentiment: processedReview.sentiment,
+                  fullResponse: sentimentResult
                 });
+              } else {
+                console.error('情感分析返回格式不符合預期:', sentimentResult);
+                processedReview.sentiment = "分析失敗";
+              }
+            } else {
+              const errorText = await sentimentResponse.text();
+              console.error('情感分析請求失敗:', {
+                status: sentimentResponse.status,
+                response: errorText
+              });
+              processedReview.sentiment = "請求失敗";
+              
+              // 如果是 402 錯誤，直接跳過後續處理
+              if (sentimentResponse.status === 402) {
+                console.log('API 額度已用完，跳過後續處理');
+                processedReviews.push(processedReview);
+                continue;
+              }
+            }
+          } catch (error) {
+            console.error('情感分析處理錯誤:', error);
+            processedReview.sentiment = "處理錯誤";
+          }
 
-                const requestBody = {
-                  text: processedReview.review.trim(),
-                  top_n: 10
-                };
+          // 2. 分類標記
+          try {
+            console.log('開始分類標記:', {
+              reviewPreview: processedReview.review.substring(0, 50) + '...'
+            });
 
-                try {
-                  const segmentationResponse = await fetch(
-                    segmentationApiUrl,
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${apiKey}`
-                      },
-                      body: JSON.stringify(requestBody)
-                    }
-                  );
+            // 添加延遲以避免 API 限制
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
-                  console.log('API 回應狀態:', {
-                    status: segmentationResponse.status,
-                    statusText: segmentationResponse.statusText,
-                    ok: segmentationResponse.ok
-                  });
+            const classificationResponse = await fetch(classificationApiUrl, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${huggingFaceApiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                inputs: processedReview.review
+              })
+            });
 
-                  if (!segmentationResponse.ok) {
-                    const errorText = await segmentationResponse.text();
-                    console.error('關鍵詞提取API錯誤:', {
-                      status: segmentationResponse.status,
-                      statusText: segmentationResponse.statusText,
-                      error: errorText,
-                      requestBody,
-                      apiUrl: segmentationApiUrl
-                    });
-                    throw new Error(`API 請求失敗: ${segmentationResponse.status} - ${errorText}`);
-                  }
+            if (classificationResponse.ok) {
+              const classificationResult = await classificationResponse.json();
+              if (Array.isArray(classificationResult) && classificationResult.length > 0 && 
+                  Array.isArray(classificationResult[0]) && classificationResult[0].length > 0) {
+                processedReview.category = [classificationResult[0][0].label];
+                console.log('分類標記結果:', {
+                  review: processedReview.review.substring(0, 50) + '...',
+                  category: processedReview.category
+                });
+              } else {
+                console.error('分類標記返回格式不符合預期:', classificationResult);
+                processedReview.category = ["分析失敗"];
+              }
+            } else {
+              const errorText = await classificationResponse.text();
+              console.error('分類標記請求失敗:', {
+                status: classificationResponse.status,
+                response: errorText
+              });
+              processedReview.category = ["請求失敗"];
+              
+              // 如果是 402 錯誤，直接跳過後續處理
+              if (classificationResponse.status === 402) {
+                console.log('API 額度已用完，跳過後續處理');
+                processedReviews.push(processedReview);
+                continue;
+              }
+            }
+          } catch (error) {
+            console.error('分類標記處理錯誤:', error);
+            processedReview.category = ["處理錯誤"];
+          }
 
-                  const segmentationResult = await segmentationResponse.json();
-                  console.log('關鍵詞提取API回應:', {
-                    status: segmentationResponse.status,
-                    resultType: typeof segmentationResult,
-                    isArray: Array.isArray(segmentationResult),
-                    hasKeywords: segmentationResult?.keywords?.length > 0,
-                    data: segmentationResult
-                  });
+          // 3. 關鍵字提取
+          try {
+            const segmentationApiUrl = processedReview.language === 'zh' 
+              ? chineseApiUrl 
+              : englishApiUrl;
 
-                  // 處理中文格式
-                  if (Array.isArray(segmentationResult)) {
-                    processedReview.keywords = segmentationResult.flatMap(result => result.keywords || []);
-                    processedReview.word_scores = segmentationResult.flatMap(result => result.word_scores || []).map(score => ({
-                      word: String(score.word || ''),
-                      score: Number(score.score || 0)
-                    }));
-                  } 
-                  // 處理英文格式
-                  else if (segmentationResult.keywords) {
-                    processedReview.keywords = segmentationResult.keywords;
-                    // 安全地處理分數
-                    if (Array.isArray(segmentationResult.scores)) {
-                      processedReview.word_scores = segmentationResult.scores.map((score: number, index: number) => ({
-                        word: segmentationResult.keywords[index],
-                        score: score
-                      }));
-                    } else if (typeof segmentationResult.scores === 'object' && segmentationResult.scores !== null) {
-                      // 如果 scores 是物件格式
-                      processedReview.word_scores = Object.entries(segmentationResult.scores).map(([word, score]) => ({
-                        word,
-                        score: Number(score)
-                      }));
-                    } else {
-                      // 如果沒有分數資訊，為每個關鍵詞設置預設分數
-                      processedReview.word_scores = segmentationResult.keywords.map((keyword: string) => ({
-                        word: keyword,
-                        score: 1.0
-                      }));
-                    }
-                  } else {
-                    throw new Error('API 回應格式不符合預期');
-                  }
+            if (!segmentationApiUrl) {
+              throw new Error(`${processedReview.language === 'zh' ? '中文' : '英文'}關鍵字API未設置`);
+            }
 
-                } catch (apiError) {
-                  console.error('API 請求或處理失敗:', apiError);
-                  throw apiError;
-                }
+            console.log('開始關鍵字提取:', {
+              language: processedReview.language,
+              reviewPreview: processedReview.review.substring(0, 50) + '...'
+            });
 
-                // 如果沒有找到關鍵詞，使用本地提取
-                if (!processedReview.keywords || processedReview.keywords.length === 0) {
-                  console.log('API未返回關鍵詞，使用本地提取');
-                  processedReview.keywords = extractKeywords(processedReview.review);
-                  processedReview.word_scores = processedReview.keywords.map(keyword => ({
-                    word: keyword,
-                    score: 1.0
-                  }));
-                }
+            // 添加延遲以避免 API 限制
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
-              } catch (error) {
-                console.error('關鍵詞提取處理失敗:', error);
-                // 使用本地提取作為備選方案
-                processedReview.keywords = extractKeywords(processedReview.review);
-                processedReview.word_scores = processedReview.keywords.map(keyword => ({
-                  word: keyword,
-                  score: 1.0
+            const keywordResponse = await fetch(segmentationApiUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                text: processedReview.review.trim(),
+                top_n: 10
+              })
+            });
+
+            if (keywordResponse.ok) {
+              const keywordResult = await keywordResponse.json();
+              
+              if (Array.isArray(keywordResult)) {
+                // 中文API返回格式
+                processedReview.keywords = keywordResult.flatMap(result => result.keywords || []);
+                processedReview.word_scores = keywordResult.flatMap(result => result.word_scores || []);
+              } else if (keywordResult.keywords) {
+                // 英文API返回格式
+                processedReview.keywords = keywordResult.keywords;
+                processedReview.word_scores = Object.entries(keywordResult.scores || {}).map(([word, score]) => ({
+                  word,
+                  score: Number(score)
                 }));
               }
 
-              return processedReview;
-            } catch (error) {
-              console.error('處理單個評論時發生錯誤:', error);
-              return {
-                date: new Date().toISOString(),
-                username: "未知用戶",
-                review: "處理失敗的評論",
-                rating: 0,
-                platform: "unknown",
-                developerResponse: "",
-                language: "zh",
-                app_id: "",
-                sentiment: "未標記",
-                category: ["未標記"],
-                keywords: ["無關鍵詞"],
-                word_scores: [],
-                tfidf_matrix: []
-              };
+              console.log('關鍵字提取結果:', {
+                review: processedReview.review.substring(0, 50) + '...',
+                keywords: processedReview.keywords,
+                wordScores: processedReview.word_scores
+              });
+            } else {
+              console.error('關鍵字提取請求失敗:', await keywordResponse.text());
+              // 使用本地提取作為備選方案
+              processedReview.keywords = extractKeywords(processedReview.review);
+              processedReview.word_scores = processedReview.keywords.map(keyword => ({
+                word: keyword,
+                score: 1.0
+              }));
             }
-          });
-          
-          const batchResults = await Promise.all(batchPromises);
-          processedReviews.push(...batchResults);
-          
-          // 添加延遲以避免 API 限制
-          if (i + batchSize < reviews.length) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (error) {
+            console.error('關鍵字提取處理錯誤:', error);
+            // 使用本地提取作為備選方案
+            processedReview.keywords = extractKeywords(processedReview.review);
+            processedReview.word_scores = processedReview.keywords.map(keyword => ({
+              word: keyword,
+              score: 1.0
+            }));
           }
+
+          processedReviews.push(processedReview);
+          
+          // 在處理完一個評論後添加較長的延遲
+          await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-          console.error('處理評論批次時發生錯誤:', error);
-          continue;
+          console.error('處理單個評論時發生錯誤:', error);
+          processedReviews.push({
+            date: new Date().toISOString(),
+            username: "未知用戶",
+            review: "處理失敗的評論",
+            rating: 0,
+            platform: "unknown",
+            developerResponse: "",
+            language: "zh",
+            app_id: "",
+            sentiment: "未標記",
+            category: ["未標記"],
+            keywords: ["無關鍵詞"],
+            word_scores: [],
+            tfidf_matrix: []
+          });
         }
       }
+
+      console.log('評論處理完成，最終結果:', {
+        totalProcessed: processedReviews.length,
+        sampleResults: processedReviews.slice(0, 2).map(review => ({
+          reviewPreview: review.review.substring(0, 50) + '...',
+          sentiment: review.sentiment,
+          category: review.category,
+          keywords: review.keywords
+        }))
+      });
 
       return processedReviews;
     } catch (error) {

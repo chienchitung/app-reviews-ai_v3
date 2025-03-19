@@ -19,6 +19,7 @@ const LogoSVG = () => (
 const productCategories = [
   { title: '評論分析', link: '/analysis' },
   { title: '資料爬取', link: '/scraper' },
+  { title: '競品分析', link: '/competitor-analysis' },
   { title: '定價方案', link: '/pricing' },
   { title: '學習中心', link: '/learn' },
 ];
@@ -178,6 +179,13 @@ export default function Navbar({}: NavbarProps) {
                     >
                       資料爬取
                       <p className="text-xs text-gray-500">自動化爬取應用商店評論</p>
+                    </Link>
+                    <Link
+                      href="/competitor-analysis"
+                      className="block px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-100"
+                    >
+                      競品分析
+                      <p className="text-xs text-gray-500">分析競品應用商店評論</p>
                     </Link>
                   </div>
                 )}
