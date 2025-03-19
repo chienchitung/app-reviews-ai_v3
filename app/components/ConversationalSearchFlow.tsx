@@ -60,8 +60,6 @@ interface ReviewData {
     sentiment: string;
     category: string[];
     keywords: string[];
-    word_scores: Array<{ word: string; score: number }>;
-    tfidf_matrix: Array<{ term: string; score: number }>;
   }>;
 }
 
@@ -147,6 +145,63 @@ const SYSTEM_PROMPT = `你是一個專業的應用商店分析助手。請遵循
    "請提供完整的應用程式名稱，您可以透過以下連結搜尋：
    App Store: <a href='https://apps.apple.com/tw/search' target='_blank' rel='noopener noreferrer'>點擊這裡搜尋</a>
    Google Play: <a href='https://play.google.com/store/search?hl=zh_TW' target='_blank' rel='noopener noreferrer'>點擊這裡搜尋<`;
+
+// 請求佇列類別
+class RequestQueue {
+  private queue: Array<() => Promise<any>> = [];
+  private processing = false;
+  private concurrentLimit = 2;
+  private activeRequests = 0;
+
+  async add<T>(request: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await request();
+          resolve(result);
+          return result; // 確保返回結果
+        } catch (error) {
+          console.error('Request failed:', error);
+          reject(error);
+          throw error; // 重新拋出錯誤
+        }
+      });
+      this.processQueue();
+    });
+  }
+
+  private async processQueue() {
+    if (this.processing || this.activeRequests >= this.concurrentLimit) return;
+    this.processing = true;
+
+    try {
+      while (this.queue.length > 0 && this.activeRequests < this.concurrentLimit) {
+        const request = this.queue.shift();
+        if (request) {
+          this.activeRequests++;
+          try {
+            await request();
+          } catch (error) {
+            console.error('Error processing request:', error);
+          } finally {
+            this.activeRequests--;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Queue processing error:', error);
+    } finally {
+      this.processing = false;
+      if (this.queue.length > 0) {
+        // 使用 setTimeout 來避免遞迴調用堆疊溢出
+        setTimeout(() => this.processQueue(), 0);
+      }
+    }
+  }
+}
+
+// 創建請求佇列實例
+const requestQueue = new RequestQueue();
 
 export default function ConversationalSearchFlow() {
   const { t } = useLanguage();
@@ -1627,16 +1682,20 @@ export default function ConversationalSearchFlow() {
                   <h4 className="text-sm font-medium">爬取內容：</h4>
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress >= 25 ? "default" : "outline"} className={scrapingProgress >= 25 ? "bg-black hover:bg-black/90 text-white" : ""}>基本資訊</Badge>
-                      {scrapingProgress >= 25 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 20 ? "default" : "outline"} className={scrapingProgress >= 20 ? "bg-black hover:bg-black/90 text-white" : ""}>基本資訊</Badge>
+                      {scrapingProgress >= 20 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress >= 50 ? "default" : "outline"} className={scrapingProgress >= 50 ? "bg-black hover:bg-black/90 text-white" : ""}>用戶評論</Badge>
-                      {scrapingProgress >= 50 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 40 ? "default" : "outline"} className={scrapingProgress >= 40 ? "bg-black hover:bg-black/90 text-white" : ""}>用戶評論</Badge>
+                      {scrapingProgress >= 40 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={scrapingProgress >= 75 ? "default" : "outline"} className={scrapingProgress >= 75 ? "bg-black hover:bg-black/90 text-white" : ""}>情感分析</Badge>
-                      {scrapingProgress >= 75 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                      <Badge variant={scrapingProgress >= 60 ? "default" : "outline"} className={scrapingProgress >= 60 ? "bg-black hover:bg-black/90 text-white" : ""}>情感分析</Badge>
+                      {scrapingProgress >= 60 && <CheckCircle className="h-3 w-3 text-green-500" />}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={scrapingProgress >= 80 ? "default" : "outline"} className={scrapingProgress >= 80 ? "bg-black hover:bg-black/90 text-white" : ""}>分類標記</Badge>
+                      {scrapingProgress >= 80 && <CheckCircle className="h-3 w-3 text-green-500" />}
                     </div>
                     <div className="flex items-center gap-2">
                       <Badge variant={scrapingProgress >= 100 ? "default" : "outline"} className={scrapingProgress >= 100 ? "bg-black hover:bg-black/90 text-white" : ""}>關鍵詞提取</Badge>
@@ -1807,324 +1866,140 @@ export default function ConversationalSearchFlow() {
     });
   };
 
-  // 檢查評論內容是否有效（不只包含表情符號和特殊字符）
+  // 檢查評論內容是否有效（只要有內容就視為有效）
   const isValidReviewContent = (text: string): boolean => {
-    // 移除表情符號和特殊字符
-    const cleanText = text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[^\w\s]/g, '').trim();
-    // 檢查是否還有其他內容
-    return cleanText.length > 0;
+    return Boolean(text && text.trim().length > 0);
   };
 
   const processReviews = async (reviews: ReviewData['reviews'] = []): Promise<ReviewData['reviews']> => {
-    try {
-      console.log('開始處理評論，輸入數據:', {
-        hasReviews: !!reviews,
-        reviewsLength: reviews?.length,
-        reviewsType: typeof reviews,
-        sampleReview: reviews?.[0]
-      });
+    console.log('開始處理評論，總數:', reviews.length);
+    const processedReviews: ReviewData['reviews'] = [];
+    const batchSize = 5; // 每批處理5條評論
 
-      if (!reviews || !Array.isArray(reviews) || reviews.length === 0) {
-        console.log('沒有評論數據需要處理或數據格式不正確');
-        return [{
-          date: new Date().toISOString(),
-          username: "未知用戶",
-          review: "無評論內容",
-          rating: 0,
-          platform: "unknown",
-          developerResponse: "",
-          language: "zh",
-          app_id: "",
-          sentiment: "未標記",
-          category: ["未標記"],
-          keywords: ["無關鍵詞"],
-          word_scores: [],
-          tfidf_matrix: []
-        }];
-      }
+    // 批次處理評論
+    for (let i = 0; i < reviews.length; i += batchSize) {
+      const batch = reviews.slice(i, i + batchSize);
+      console.log(`處理批次 ${Math.floor(i/batchSize) + 1}/${Math.ceil(reviews.length/batchSize)}`);
 
-      // 限制處理前10筆評論
-      const limitedReviews = reviews.slice(0, 10);
-      console.log(`限制處理前10筆評論，實際處理數量: ${limitedReviews.length}`);
-
-      const processedReviews: ReviewData['reviews'] = [];
-      
-      // 檢查 API 配置
-      const chineseApiUrl = process.env.NEXT_PUBLIC_CHINESE_API_URL;
-      const englishApiUrl = process.env.NEXT_PUBLIC_ENGLISH_API_URL;
-      const huggingFaceApiKey = process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY;
-
-      console.log('API 配置檢查:', {
-        chineseApiUrl: chineseApiUrl ? '已設置' : '未設置',
-        englishApiUrl: englishApiUrl ? '已設置' : '未設置',
-        huggingFaceApiKey: huggingFaceApiKey ? '已設置' : '未設置'
-      });
-
-      // 情感分析和分類API的URL
-      const sentimentApiUrl = "https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-sentiment";
-      const classificationApiUrl = "https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-multi-classification";
-      
-      for (const review of limitedReviews) {
-        try {
-          if (!review || typeof review !== 'object') {
-            console.error('無效的評論數據:', review);
-            throw new Error('無效的評論數據格式');
-          }
-
-          const processedReview: ReviewData['reviews'][0] = {
-            date: review.date || new Date().toISOString(),
-            username: review.username || "未知用戶",
-            review: review.review || "無評論內容",
-            rating: review.rating || 0,
-            platform: review.platform || "unknown",
-            developerResponse: review.developerResponse || "",
-            language: review.language || "zh",
-            app_id: review.app_id || "",
-            sentiment: "未標記",
-            category: ["未標記"],
-            keywords: ["無關鍵詞"],
-            word_scores: [],
-            tfidf_matrix: []
+      const batchPromises = batch.map(async (review) => {
+        if (!review.review) {
+          console.log('跳過空評論');
+          return {
+            ...review,
+            sentiment: ['未標記'],
+            category: ['未標記'],
+            keywords: []
           };
-
-          // 如果評論內容為空或無效，跳過處理
-          if (!processedReview.review || 
-              processedReview.review.trim() === '' || 
-              !isValidReviewContent(processedReview.review)) {
-            console.log('評論內容為空或無效，跳過處理');
-            processedReviews.push(processedReview);
-            continue;
-          }
-
-          // 1. 情感分析
-          try {
-            console.log('開始情感分析:', {
-              reviewPreview: processedReview.review.substring(0, 50) + '...'
-            });
-
-            // 添加延遲以避免 API 限制
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            const sentimentResponse = await fetch(sentimentApiUrl, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${huggingFaceApiKey}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                inputs: processedReview.review
-              })
-            });
-
-            if (sentimentResponse.ok) {
-              const sentimentResult = await sentimentResponse.json();
-              if (Array.isArray(sentimentResult) && sentimentResult.length > 0 && 
-                  Array.isArray(sentimentResult[0]) && sentimentResult[0].length > 0) {
-                processedReview.sentiment = sentimentResult[0][0].label;
-                console.log('情感分析結果:', {
-                  review: processedReview.review.substring(0, 50) + '...',
-                  sentiment: processedReview.sentiment,
-                  fullResponse: sentimentResult
-                });
-              } else {
-                console.error('情感分析返回格式不符合預期:', sentimentResult);
-                processedReview.sentiment = "分析失敗";
-              }
-            } else {
-              const errorText = await sentimentResponse.text();
-              console.error('情感分析請求失敗:', {
-                status: sentimentResponse.status,
-                response: errorText
-              });
-              processedReview.sentiment = "請求失敗";
-              
-              // 如果是 402 錯誤，直接跳過後續處理
-              if (sentimentResponse.status === 402) {
-                console.log('API 額度已用完，跳過後續處理');
-                processedReviews.push(processedReview);
-                continue;
-              }
-            }
-          } catch (error) {
-            console.error('情感分析處理錯誤:', error);
-            processedReview.sentiment = "處理錯誤";
-          }
-
-          // 2. 分類標記
-          try {
-            console.log('開始分類標記:', {
-              reviewPreview: processedReview.review.substring(0, 50) + '...'
-            });
-
-            // 添加延遲以避免 API 限制
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            const classificationResponse = await fetch(classificationApiUrl, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${huggingFaceApiKey}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                inputs: processedReview.review
-              })
-            });
-
-            if (classificationResponse.ok) {
-              const classificationResult = await classificationResponse.json();
-              if (Array.isArray(classificationResult) && classificationResult.length > 0 && 
-                  Array.isArray(classificationResult[0]) && classificationResult[0].length > 0) {
-                processedReview.category = [classificationResult[0][0].label];
-                console.log('分類標記結果:', {
-                  review: processedReview.review.substring(0, 50) + '...',
-                  category: processedReview.category
-                });
-              } else {
-                console.error('分類標記返回格式不符合預期:', classificationResult);
-                processedReview.category = ["分析失敗"];
-              }
-            } else {
-              const errorText = await classificationResponse.text();
-              console.error('分類標記請求失敗:', {
-                status: classificationResponse.status,
-                response: errorText
-              });
-              processedReview.category = ["請求失敗"];
-              
-              // 如果是 402 錯誤，直接跳過後續處理
-              if (classificationResponse.status === 402) {
-                console.log('API 額度已用完，跳過後續處理');
-                processedReviews.push(processedReview);
-                continue;
-              }
-            }
-          } catch (error) {
-            console.error('分類標記處理錯誤:', error);
-            processedReview.category = ["處理錯誤"];
-          }
-
-          // 3. 關鍵字提取
-          try {
-            const segmentationApiUrl = processedReview.language === 'zh' 
-              ? chineseApiUrl 
-              : englishApiUrl;
-
-            if (!segmentationApiUrl) {
-              throw new Error(`${processedReview.language === 'zh' ? '中文' : '英文'}關鍵字API未設置`);
-            }
-
-            console.log('開始關鍵字提取:', {
-              language: processedReview.language,
-              reviewPreview: processedReview.review.substring(0, 50) + '...'
-            });
-
-            // 添加延遲以避免 API 限制
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            const keywordResponse = await fetch(segmentationApiUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                text: processedReview.review.trim(),
-                top_n: 10
-              })
-            });
-
-            if (keywordResponse.ok) {
-              const keywordResult = await keywordResponse.json();
-              
-              if (Array.isArray(keywordResult)) {
-                // 中文API返回格式
-                processedReview.keywords = keywordResult.flatMap(result => result.keywords || []);
-                processedReview.word_scores = keywordResult.flatMap(result => result.word_scores || []);
-              } else if (keywordResult.keywords) {
-                // 英文API返回格式
-                processedReview.keywords = keywordResult.keywords;
-                processedReview.word_scores = Object.entries(keywordResult.scores || {}).map(([word, score]) => ({
-                  word,
-                  score: Number(score)
-                }));
-              }
-
-              console.log('關鍵字提取結果:', {
-                review: processedReview.review.substring(0, 50) + '...',
-                keywords: processedReview.keywords,
-                wordScores: processedReview.word_scores
-              });
-            } else {
-              console.error('關鍵字提取請求失敗:', await keywordResponse.text());
-              // 使用本地提取作為備選方案
-              processedReview.keywords = extractKeywords(processedReview.review);
-              processedReview.word_scores = processedReview.keywords.map(keyword => ({
-                word: keyword,
-                score: 1.0
-              }));
-            }
-          } catch (error) {
-            console.error('關鍵字提取處理錯誤:', error);
-            // 使用本地提取作為備選方案
-            processedReview.keywords = extractKeywords(processedReview.review);
-            processedReview.word_scores = processedReview.keywords.map(keyword => ({
-              word: keyword,
-              score: 1.0
-            }));
-          }
-
-          processedReviews.push(processedReview);
-          
-          // 在處理完一個評論後添加較長的延遲
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-          console.error('處理單個評論時發生錯誤:', error);
-          processedReviews.push({
-            date: new Date().toISOString(),
-            username: "未知用戶",
-            review: "處理失敗的評論",
-            rating: 0,
-            platform: "unknown",
-            developerResponse: "",
-            language: "zh",
-            app_id: "",
-            sentiment: "未標記",
-            category: ["未標記"],
-            keywords: ["無關鍵詞"],
-            word_scores: [],
-            tfidf_matrix: []
-          });
         }
-      }
 
-      console.log('評論處理完成，最終結果:', {
-        totalProcessed: processedReviews.length,
-        sampleResults: processedReviews.slice(0, 2).map(review => ({
-          reviewPreview: review.review.substring(0, 50) + '...',
-          sentiment: review.sentiment,
-          category: review.category,
-          keywords: review.keywords
-        }))
+        try {
+          // 使用請求佇列處理情感分析
+          const sentimentPromise = requestQueue.add(async () => {
+            const response = await fetch(
+              'https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-sentiment',
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ inputs: review.review })
+              }
+            );
+
+            if (!response.ok) {
+              console.error(`情感分析請求失敗: ${response.status}`);
+              return '未標記';
+            }
+
+            const result = await response.json();
+            if (!Array.isArray(result) || !result[0]) {
+              console.error('情感分析返回格式不正確:', result);
+              return '未標記';
+            }
+
+            return result[0].reduce((prev: any, current: any) => 
+              prev.score > current.score ? prev : current
+            ).label;
+          }).catch(error => {
+            console.error('情感分析錯誤:', error);
+            return '未標記';
+          });
+
+          // 使用請求佇列處理分類標記
+          const categoryPromise = requestQueue.add(async () => {
+            const response = await fetch(
+              'https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-multi-classification',
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ inputs: review.review })
+              }
+            );
+
+            if (!response.ok) {
+              console.error(`分類標記請求失敗: ${response.status}`);
+              return ['未標記'];
+            }
+
+            const result = await response.json();
+            if (!Array.isArray(result) || !result[0]) {
+              console.error('分類標記返回格式不正確:', result);
+              return ['未標記'];
+            }
+
+            return [result[0].reduce((prev: any, current: any) => 
+              prev.score > current.score ? prev : current
+            ).label];
+          }).catch(error => {
+            console.error('分類標記錯誤:', error);
+            return ['未標記'];
+          });
+
+          // 並行處理情感分析和分類標記
+          const [sentiment, category] = await Promise.all([
+            sentimentPromise,
+            categoryPromise
+          ]);
+
+          // 提取關鍵詞
+          const keywords = extractKeywords(review.review);
+
+          return {
+            ...review,
+            sentiment,
+            category,
+            keywords
+          };
+        } catch (error) {
+          console.error('處理評論錯誤:', error);
+          return {
+            ...review,
+            sentiment: ['未標記'],
+            category: ['未標記'],
+            keywords: []
+          };
+        }
       });
 
-      return processedReviews;
-    } catch (error) {
-      console.error('處理評論時發生錯誤:', error);
-      return [{
-        date: new Date().toISOString(),
-        username: "未知用戶",
-        review: "處理失敗",
-        rating: 0,
-        platform: "unknown",
-        developerResponse: "",
-        language: "zh",
-        app_id: "",
-        sentiment: "未標記",
-        category: ["未標記"],
-        keywords: ["無關鍵詞"],
-        word_scores: [],
-        tfidf_matrix: []
-      }];
+      try {
+        const batchResults = await Promise.all(batchPromises);
+        processedReviews.push(...batchResults);
+
+        // 批次之間添加較短的延遲
+        if (i + batchSize < reviews.length) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (error) {
+        console.error('處理批次時發生錯誤:', error);
+      }
     }
+
+    console.log('評論處理完成，總數:', processedReviews.length);
+    return processedReviews;
   };
 
   return (
