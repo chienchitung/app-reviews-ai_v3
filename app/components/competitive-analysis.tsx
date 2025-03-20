@@ -23,10 +23,11 @@ import {
   PolarRadiusAxis,
   Radar,
 } from "recharts"
-import { ChevronDown, ChevronUp, Star, Download, Filter, ArrowLeft, Copy, Check, ThumbsUp, ThumbsDown, Minus } from "lucide-react"
+import { ChevronDown, ChevronUp, Star, Download, Filter, ArrowLeft, Copy, Check, ThumbsUp, ThumbsDown, Minus, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { SearchResult } from './types'
+import { utils as xlsxUtils, write as xlsxWrite } from 'xlsx';
 
 interface AppInfo {
   platform: string;
@@ -90,6 +91,11 @@ interface AppData {
     summary: string;
   };
   processedReviews: Review[];
+  uxAnalysis?: {
+    strengths: string[];
+    improvements: string[];
+    summary: string;
+  };
 }
 
 interface Review {
@@ -282,32 +288,44 @@ const analyzeAppFeatures = async (app: AppData) => {
 
 const analyzeReviews = async (app: AppData) => {
   try {
-    const prompt = `分析以下應用程式的評論：
+    // 準備所有評論數據
+    const allReviews = app.processedReviews;
+    
+    if (!allReviews || allReviews.length === 0) {
+      return {
+        advantages: ['尚無評論資料可供分析'],
+        improvements: ['尚無評論資料可供分析'],
+        summary: '目前尚無足夠的評論資料進行分析。'
+      };
+    }
 
-應用名稱：${app.name}
-評分：${app.iosRating}
-正面評論數：${app.reviews.positive.length}
-負面評論數：${app.reviews.negative.length}
+    const positiveReviews = allReviews.filter(r => r.sentiment.includes('正面'));
+    const negativeReviews = allReviews.filter(r => r.sentiment.includes('負面'));
 
-正面評論：
-${app.reviews.positive.map(review => `- ${review.review}`).join('\n')}
+    const prompt = `分析以下應用程式 ${app.name} 的所有用戶評論：
 
-負面評論：
-${app.reviews.negative.map(review => `- ${review.review}`).join('\n')}
+評分統計：
+- 總評分：${app.iosRating || app.androidRating}
+- 總評論數：${allReviews.length}
+- 正面評論數：${positiveReviews.length}
+- 負面評論數：${negativeReviews.length}
 
-請直接以 JSON 格式回覆，不要加入任何其他格式或說明文字：
+所有評論內容：
+${allReviews.map(review => `- 評分：${review.rating}，評論：${review.review}`).join('\n')}
+
+請根據以上所有評論進行深入分析，並以 JSON 格式回覆以下內容：
 {
   "advantages": [
-    "列出3點主要優勢",
-    "每點不超過30字",
-    "根據正面評論歸納"
+    "列出3-5點主要優勢，每點不超過50字",
+    "每點根據用戶實際評論內容歸納",
+    "重點突出用戶最認可的功能或特點"
   ],
   "improvements": [
-    "列出3點待改進項目",
-    "每點不超過30字",
-    "根據負面評論歸納"
+    "列出3-5點具體待改進項目，每點不超過50字",
+    "每點必須基於用戶實際反饋",
+    "優先列出影響用戶體驗的關鍵問題"
   ],
-  "summary": "整體評論摘要，不超過100字"
+  "summary": "整體分析摘要，總結用戶反饋的核心觀點，並提供具體的改進方向建議。長度200字。"
 }`;
 
     const response = await fetch('/api/gemini', {
@@ -332,7 +350,87 @@ ${app.reviews.negative.map(review => `- ${review.review}`).join('\n')}
 
     let parsedResponse;
     try {
-      // 清理回應內容，移除可能的 Markdown 格式
+      const cleanResponse = data.response
+        .replace(/\`\`\`json\n?/g, '')
+        .replace(/\`\`\`\n?/g, '')
+        .trim();
+
+      parsedResponse = JSON.parse(cleanResponse);
+      
+      if (!parsedResponse.advantages || !parsedResponse.improvements || !parsedResponse.summary) {
+        throw new Error('分析結果格式不完整');
+      }
+
+      return {
+        advantages: parsedResponse.advantages,
+        improvements: parsedResponse.improvements,
+        summary: parsedResponse.summary
+      };
+    } catch (parseError) {
+      console.error('解析 AI 回應時發生錯誤:', parseError);
+      throw new Error('無法解析分析結果');
+    }
+  } catch (error) {
+    console.error('分析評論時發生錯誤:', error);
+    return {
+      advantages: ['暫時無法取得分析結果'],
+      improvements: ['暫時無法取得分析結果'],
+      summary: '暫時無法取得分析結果，請稍後再試。'
+    };
+  }
+};
+
+// 新增用戶體驗分析函數
+const analyzeUserExperience = async (app: AppData) => {
+  try {
+    const prompt = `分析以下應用程式的用戶體驗數據：
+
+應用名稱：${app.name}
+用戶體驗評分：
+- 會員登入: ${app.uxScores.memberlogin}%
+- 搜尋功能: ${app.uxScores.search}%
+- 商品相關: ${app.uxScores.product}%
+- 結帳付款: ${app.uxScores.checkout}%
+- 客戶服務: ${app.uxScores.service}%
+- 其他功能: ${app.uxScores.other}%
+
+請根據以上數據，分析該應用程式的用戶體驗優勢與待改進項目。直接以 JSON 格式回覆，不要加入任何其他格式或說明文字：
+{
+  "strengths": [
+    "列出2-3點主要優勢",
+    "每點不超過30字",
+    "根據評分較高的項目分析"
+  ],
+  "improvements": [
+    "列出2-3點待改進項目",
+    "每點不超過30字",
+    "根據評分較低的項目分析"
+  ],
+  "summary": "整體用戶體驗摘要，不超過100字"
+}`;
+
+    const response = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt,
+        model: 'gemini-2.0-flash'
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('分析請求失敗');
+    }
+
+    const data = await response.json();
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
+    let parsedResponse;
+    try {
       const cleanResponse = data.response
         .replace(/\`\`\`json\n?/g, '')
         .replace(/\`\`\`\n?/g, '')
@@ -341,33 +439,42 @@ ${app.reviews.negative.map(review => `- ${review.review}`).join('\n')}
       parsedResponse = JSON.parse(cleanResponse);
       
       return {
-        advantages: parsedResponse.advantages || [],
+        strengths: parsedResponse.strengths || [],
         improvements: parsedResponse.improvements || [],
-        summary: parsedResponse.summary || '暫無評論摘要'
+        summary: parsedResponse.summary || '暫無分析摘要'
       };
     } catch (parseError) {
       console.error('解析 AI 回應時發生錯誤:', parseError);
       return {
-        advantages: ['暫無優勢分析'],
+        strengths: ['暫無優勢分析'],
         improvements: ['暫無改進建議'],
-        summary: '暫無評論摘要'
+        summary: '暫無分析摘要'
       };
     }
   } catch (error) {
-    console.error('分析評論時發生錯誤:', error);
+    console.error('分析用戶體驗時發生錯誤:', error);
     return {
-      advantages: ['暫無優勢分析'],
+      strengths: ['暫無優勢分析'],
       improvements: ['暫無改進建議'],
-      summary: '暫無評論摘要'
+      summary: '暫無分析摘要'
     };
   }
 };
 
 export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: CompetitiveAnalysisProps) {
   const [selectedTimeframe, setSelectedTimeframe] = useState("30days")
+  const [selectedDownloadType, setSelectedDownloadType] = useState("full_report")
   const [expandedApp, setExpandedApp] = useState<string | null>(null)
   const [appData, setAppData] = useState<AppData[]>([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [reviewFilters, setReviewFilters] = useState({
+    sentiment: 'all',
+    sortBy: 'date',
+    sortOrder: 'desc',
+    timeframe: '30days'
+  });
+  const [expandedReviews, setExpandedReviews] = useState<{ [key: string]: boolean }>({});
+  const [showAnalysisSummary, setShowAnalysisSummary] = useState<string | null>(null);
 
   const toggleAppDetails = (appId: string) => {
     if (expandedApp === appId) {
@@ -376,6 +483,123 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
       setExpandedApp(appId)
     }
   }
+
+  const toggleReviewExpand = (reviewId: string) => {
+    setExpandedReviews(prev => ({
+      ...prev,
+      [reviewId]: !prev[reviewId]
+    }));
+  };
+
+  // Add new function to filter reviews by date
+  const filterReviewsByDate = (reviews: Review[], timeframe: string) => {
+    const now = new Date();
+    const cutoffDate = new Date();
+    
+    switch(timeframe) {
+      case '7days':
+        cutoffDate.setDate(now.getDate() - 7);
+        break;
+      case '30days':
+        cutoffDate.setDate(now.getDate() - 30);
+        break;
+      case '90days':
+        cutoffDate.setDate(now.getDate() - 90);
+        break;
+      case '1year':
+        cutoffDate.setFullYear(now.getFullYear() - 1);
+        break;
+      default:
+        return reviews;
+    }
+    
+    return reviews.filter(review => new Date(review.date) >= cutoffDate);
+  };
+
+  // Update download function
+  const handleDownload = async () => {
+    if (selectedDownloadType === 'raw_data') {
+      // Prepare data for Excel
+      const excelData = appData.map(app => {
+        const filteredReviews = filterReviewsByDate(app.processedReviews, selectedTimeframe);
+        return filteredReviews.map(review => ({
+          '應用程式': app.name,
+          '日期': review.date,
+          '評分': review.rating,
+          '平台': review.platform,
+          '評論內容': review.review,
+          '情感分析': review.sentiment.join(', '),
+          '分類': review.category.join(', ')
+        }));
+      }).flat();
+
+      // Create workbook and worksheet
+      const worksheet = xlsxUtils.json_to_sheet(excelData);
+      const workbook = xlsxUtils.book_new();
+      xlsxUtils.book_append_sheet(workbook, worksheet, '評論數據');
+
+      // Auto-size columns
+      type RowType = typeof excelData[0];
+      const maxWidths: { [key in keyof RowType]: number } = {} as { [key in keyof RowType]: number };
+      
+      excelData.forEach(row => {
+        (Object.keys(row) as Array<keyof RowType>).forEach(key => {
+          const cellValue = row[key] ? String(row[key]) : '';
+          maxWidths[key] = Math.max(maxWidths[key] || 0, cellValue.length);
+        });
+      });
+
+      worksheet['!cols'] = (Object.keys(excelData[0]) as Array<keyof RowType>).map(key => ({
+        wch: Math.min(Math.max(maxWidths[key], key.length), 50)
+      }));
+
+      // Generate Excel file
+      const excelBuffer = xlsxWrite(workbook, { 
+        bookType: 'xlsx', 
+        type: 'array',
+        cellStyles: true
+      });
+
+      // Create and trigger download
+      const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `app_reviews_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  };
+
+  // Update getFilteredReviews function
+  const getFilteredReviews = (reviews: Review[], filters: typeof reviewFilters) => {
+    return filterReviewsByDate(reviews, filters.timeframe)
+      .filter(review => {
+        if (filters.sentiment === 'all') return true;
+        if (filters.sentiment === 'positive') return review.sentiment.includes('正面');
+        if (filters.sentiment === 'negative') return review.sentiment.includes('負面');
+        return true;
+      })
+      .sort((a, b) => {
+        if (filters.sortBy === 'date') {
+          const dateA = new Date(a.date).getTime();
+          const dateB = new Date(b.date).getTime();
+          return filters.sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+        }
+        if (filters.sortBy === 'rating') {
+          return filters.sortOrder === 'desc' ? b.rating - a.rating : a.rating - b.rating;
+        }
+        return 0;
+      });
+  };
+
+  // Update useEffect to sync timeframe
+  useEffect(() => {
+    setReviewFilters(prev => ({
+      ...prev,
+      timeframe: selectedTimeframe
+    }));
+  }, [selectedTimeframe]);
 
   useEffect(() => {
     const initializeData = async () => {
@@ -436,11 +660,15 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
             // 使用 Gemini 分析評論
             const reviewAnalysis = await analyzeReviews(baseData);
+
+            // 使用 Gemini 分析用戶體驗
+            const uxAnalysis = await analyzeUserExperience(baseData);
             
             return {
               ...baseData,
               features,
-              reviewAnalysis
+              reviewAnalysis,
+              uxAnalysis
             };
           })
         );
@@ -551,7 +779,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         </CardHeader>
         <CardContent>
           <div className="flex justify-end items-center mb-6 gap-4">
-            <Select defaultValue={selectedTimeframe} onValueChange={setSelectedTimeframe}>
+            <Select value={selectedTimeframe} onValueChange={setSelectedTimeframe}>
               <SelectTrigger className="w-[180px] bg-white border-gray-200">
                 <SelectValue placeholder="選擇時間範圍" />
               </SelectTrigger>
@@ -562,7 +790,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                 <SelectItem value="1year">過去1年</SelectItem>
               </SelectContent>
             </Select>
-            <Select defaultValue="report_type">
+            <Select value={selectedDownloadType} onValueChange={setSelectedDownloadType}>
               <SelectTrigger className="w-[180px] bg-white border-gray-200">
                 <SelectValue placeholder="選擇下載內容" />
               </SelectTrigger>
@@ -571,7 +799,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                 <SelectItem value="raw_data">原始數據</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" size="icon" className="bg-white border-gray-200">
+            <Button variant="outline" size="icon" className="bg-white border-gray-200" onClick={handleDownload}>
               <Download className="h-4 w-4" />
             </Button>
           </div>
@@ -625,14 +853,6 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                             <span>最後更新</span>
                             <span>{app.lastUpdate}</span>
                           </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {app.uxScores.other === Math.max(...appData.map((a) => a.uxScores.other)) ? (
-                            <Badge variant="destructive">其他</Badge>
-                          ) : (
-                            <Badge variant="outline">其他</Badge>
-                          )}
                         </div>
 
                         <Button
@@ -1008,53 +1228,62 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                 {appData.map((app) => (
                   <Card key={`${app.id}-ux-details`}>
                     <CardHeader>
-                      <CardTitle>{app.name} 用戶體驗優勢</CardTitle>
+                      <CardTitle>{app.name} 用戶體驗分析</CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="space-y-4">
+                      <div className="space-y-6">
                         <div>
-                          <h4 className="font-medium mb-2">會員登入</h4>
-                          <ul className="list-disc pl-5 space-y-1">
-                            {app.uxScores.memberlogin === Math.max(...appData.map((a) => a.uxScores.memberlogin)) ? (
-                              <>
-                                <li className="text-sm">會員登入</li>
-                              </>
-                            ) : (
-                              <>
-                                <li className="text-sm">會員登入</li>
-                              </>
-                            )}
+                          <h4 className="font-medium mb-3 flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+                              <path d="M8 11h8"/>
+                              <path d="M12 15V7"/>
+                            </svg>
+                            主要優勢
+                          </h4>
+                          <ul className="space-y-2">
+                            {app.uxAnalysis?.strengths.map((strength, index) => (
+                              <li key={index} className="flex items-start gap-2">
+                                <svg className="w-5 h-5 text-emerald-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span className="text-sm">{strength}</span>
+                              </li>
+                            ))}
                           </ul>
                         </div>
 
                         <div>
-                          <h4 className="font-medium mb-2">搜尋功能</h4>
-                          <ul className="list-disc pl-5 space-y-1">
-                            {app.uxScores.search === Math.max(...appData.map((a) => a.uxScores.search)) ? (
-                              <>
-                                <li className="text-sm">搜尋功能</li>
-                              </>
-                            ) : (
-                              <>
-                                <li className="text-sm">搜尋功能</li>
-                              </>
-                            )}
+                          <h4 className="font-medium mb-3 flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                              <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                            待改進項目
+                          </h4>
+                          <ul className="space-y-2">
+                            {app.uxAnalysis?.improvements.map((improvement, index) => (
+                              <li key={index} className="flex items-start gap-2">
+                                <svg className="w-5 h-5 text-rose-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                </svg>
+                                <span className="text-sm">{improvement}</span>
+                              </li>
+                            ))}
                           </ul>
                         </div>
 
-                        <div>
-                          <h4 className="font-medium mb-2">需要改進的地方</h4>
-                          <ul className="list-disc pl-5 space-y-1 text-red-600">
-                            {app.uxScores.other === Math.max(...appData.map((a) => a.uxScores.other)) ? (
-                              <>
-                                <li className="text-sm">其他</li>
-                              </>
-                            ) : (
-                              <>
-                                <li className="text-sm">其他</li>
-                              </>
-                            )}
-                          </ul>
+                        <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
+                          <h4 className="text-base font-medium text-slate-800 mb-3 flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+                            </svg>
+                            整體分析摘要
+                          </h4>
+                          <div className="text-sm text-slate-700 space-y-2">
+                            <p>{app.uxAnalysis?.summary}</p>
+                          </div>
                         </div>
                       </div>
                     </CardContent>
@@ -1065,121 +1294,191 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
             <TabsContent value="reviews" className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {appData.map((app) => (
-                  <Card key={`${app.id}-reviews`} className="overflow-hidden">
+                {appData.map((currentApp) => (
+                  <Card key={`${currentApp.id}-reviews`} className="overflow-hidden">
                     <CardHeader className="border-b bg-gray-50">
                       <div className="flex items-center gap-4">
                         <img 
-                          src={app.logo} 
-                          alt={app.name} 
+                          src={currentApp.logo} 
+                          alt={currentApp.name} 
                           className="w-12 h-12 rounded-lg shadow-sm"
                         />
                         <div className="flex-1">
-                          <CardTitle className="text-lg mb-1">{app.name}</CardTitle>
+                          <CardTitle className="text-lg mb-1">{currentApp.name}</CardTitle>
                           <div className="flex items-center gap-2 text-sm text-muted-foreground">
                             <div className="flex items-center gap-1">
                               <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                              {calculateAverageRating(app.processedReviews)}
+                              {calculateAverageRating(currentApp.processedReviews)}
                             </div>
                             <span className="text-gray-300">|</span>
-                            <span>評論 {app.processedReviews.length}</span>
-                            <span className="text-gray-300">|</span>
-                            <span className="text-emerald-600">正面 {app.reviewStats.positive}%</span>
-                            <span className="text-gray-300">|</span>
-                            <span className="text-rose-600">負面 {app.reviewStats.negative}%</span>
+                            <span>評論 {currentApp.processedReviews.length}</span>
                           </div>
                         </div>
                       </div>
                     </CardHeader>
                     <CardContent className="p-6">
                       <div className="space-y-8">
-                        {/* 評論分析區塊 */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          {/* 正面評論分析 */}
-                          <div className="space-y-4">
-                            <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-100">
-                              <h4 className="text-base font-medium text-emerald-800 mb-3 flex items-center gap-2">
-                                <ThumbsUp className="h-5 w-5" />
-                                使用者正面回饋 ({app.reviews.positive.length})
-                              </h4>
-                              <div className="space-y-3">
-                                {app.reviews.positive.map((review, index) => (
-                                  <div key={index} className="text-sm text-emerald-700 pb-2 border-b border-emerald-200 last:border-0">
-                                    {review.review}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
+                        <div className="flex flex-wrap gap-4 items-center justify-between">
+                          <div className="flex flex-wrap gap-2">
+                            <Select
+                              value={reviewFilters.sentiment}
+                              onValueChange={(value) => setReviewFilters(prev => ({ ...prev, sentiment: value }))}
+                            >
+                              <SelectTrigger className="w-[140px] bg-white">
+                                <SelectValue placeholder="情感篩選" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-white">
+                                <SelectItem value="all">全部評論</SelectItem>
+                                <SelectItem value="positive">正面評論</SelectItem>
+                                <SelectItem value="negative">負面評論</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            
+                            <Select
+                              value={reviewFilters.sortBy}
+                              onValueChange={(value) => setReviewFilters(prev => ({ ...prev, sortBy: value }))}
+                            >
+                              <SelectTrigger className="w-[140px] bg-white">
+                                <SelectValue placeholder="排序方式" />
+                              </SelectTrigger>
+                              <SelectContent className="bg-white">
+                                <SelectItem value="date">依日期</SelectItem>
+                                <SelectItem value="rating">依評分</SelectItem>
+                              </SelectContent>
+                            </Select>
 
-                          {/* 負面評論分析 */}
-                          <div className="space-y-4">
-                            <div className="p-4 bg-rose-50 rounded-lg border border-rose-100">
-                              <h4 className="text-base font-medium text-rose-800 mb-3 flex items-center gap-2">
-                                <ThumbsDown className="h-5 w-5" />
-                                使用者負面回饋 ({app.reviews.negative.length})
-                              </h4>
-                              <div className="space-y-3">
-                                {app.reviews.negative.map((review, index) => (
-                                  <div key={index} className="text-sm text-rose-700 pb-2 border-b border-rose-200 last:border-0">
-                                    {review.review}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="bg-white"
+                              onClick={() => setReviewFilters(prev => ({
+                                ...prev,
+                                sortOrder: prev.sortOrder === 'desc' ? 'asc' : 'desc'
+                              }))}
+                            >
+                              {reviewFilters.sortOrder === 'desc' ? (
+                                <ChevronDown className="h-4 w-4" />
+                              ) : (
+                                <ChevronUp className="h-4 w-4" />
+                              )}
+                            </Button>
                           </div>
                         </div>
 
-                        {/* 洞察與改進建議 */}
-                        <div className="space-y-6">
-                          <div>
-                            <h4 className="text-base font-medium mb-4 flex items-center gap-2">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M12 2a10 10 0 1 0 10 10H12V2zM21.17 8H12V4.83L21.17 8zM12 12h10"/>
-                              </svg>
-                              評論洞察分析
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                              <div className="p-4 bg-sky-50 rounded-lg border border-sky-100">
-                                <h5 className="text-sm font-medium text-sky-800 mb-3">主要優勢</h5>
-                                <ul className="space-y-2 text-sm text-sky-700">
-                                  {app.reviewAnalysis?.advantages.map((advantage, index) => (
-                                    <li key={index} className="flex items-start gap-2">
-                                      <svg className="w-4 h-4 mt-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                      </svg>
-                                      <span>{advantage}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-
-                              <div className="p-4 bg-amber-50 rounded-lg border border-amber-100">
-                                <h5 className="text-sm font-medium text-amber-800 mb-3">改進建議</h5>
-                                <ul className="space-y-2 text-sm text-amber-700">
-                                  {app.reviewAnalysis?.improvements.map((improvement, index) => (
-                                    <li key={index} className="flex items-start gap-2">
-                                      <svg className="w-4 h-4 mt-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                      </svg>
-                                      <span>{improvement}</span>
-                                    </li>
-                                  ))}
-                                </ul>
+                        <div className="grid grid-cols-1 gap-6">
+                          {/* 評論列表 */}
+                          <div className="space-y-4">
+                            <div className="p-4 bg-gray-50 rounded-lg border">
+                              <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+                                {getFilteredReviews(currentApp.processedReviews, reviewFilters).map((review: Review, index: number) => (
+                                  <div 
+                                    key={index} 
+                                    className={`bg-white rounded-lg p-3 shadow-sm transition-all duration-200 ${
+                                      review.sentiment.includes('正面') ? 'hover:border-emerald-200' : 
+                                      review.sentiment.includes('負面') ? 'hover:border-rose-200' : 
+                                      'hover:border-gray-200'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex items-center">
+                                          {[...Array(5)].map((_, i) => (
+                                            <Star
+                                              key={i}
+                                              className={`h-3 w-3 ${
+                                                i < review.rating
+                                                  ? "fill-yellow-400 text-yellow-400"
+                                                  : "fill-gray-200 text-gray-200"
+                                              }`}
+                                            />
+                                          ))}
+                                        </div>
+                                        <span className="text-xs text-gray-500 md:text-sm">
+                                          {new Date(review.date).toLocaleDateString('zh-TW')}
+                                        </span>
+                                      </div>
+                                      <Badge 
+                                        variant="outline" 
+                                        className={`
+                                          ${review.sentiment.includes('正面') 
+                                            ? 'text-emerald-600 border-emerald-200 bg-emerald-50' 
+                                            : review.sentiment.includes('負面')
+                                            ? 'text-rose-600 border-rose-200 bg-rose-50'
+                                            : 'text-gray-600 border-gray-200 bg-gray-50'
+                                          }
+                                        `}
+                                      >
+                                        {review.platform}
+                                      </Badge>
+                                    </div>
+                                    <div className="relative">
+                                      <p className={`text-sm md:text-base text-gray-700 ${
+                                        expandedReviews[`${currentApp.id}-${index}`] ? '' : 'line-clamp-3'
+                                      } transition-all duration-200`}>
+                                        {review.review}
+                                      </p>
+                                      <button 
+                                        className="text-xs text-blue-600 hover:text-blue-800 mt-1 focus:outline-none"
+                                        onClick={() => toggleReviewExpand(`${currentApp.id}-${index}`)}
+                                      >
+                                        {expandedReviews[`${currentApp.id}-${index}`] ? '收起' : '展開全文'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
                             </div>
                           </div>
 
-                          <div className="p-4 bg-slate-50 rounded-lg border border-slate-100">
-                            <h4 className="text-base font-medium text-slate-800 mb-3 flex items-center gap-2">
-                              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
-                              </svg>
-                              整體評論摘要
-                            </h4>
-                            <div className="text-sm text-slate-700 space-y-2">
-                              <p>{app.reviewAnalysis?.summary}</p>
+                          {/* 評論統計和分析 */}
+                          <div className="space-y-4">
+                            <div className="p-4 bg-white rounded-lg border">
+                              <h5 className="text-base font-medium mb-4">評論統計</h5>
+                              <div className="space-y-4">
+                                <div>
+                                  <div className="flex justify-between text-sm mb-1">
+                                    <span>正面評價</span>
+                                    <span>{currentApp.reviewStats.positive}%</span>
+                                  </div>
+                                  <Progress value={currentApp.reviewStats.positive} className="bg-gray-100" />
+                                </div>
+                                <div>
+                                  <div className="flex justify-between text-sm mb-1">
+                                    <span>負面評價</span>
+                                    <span>{currentApp.reviewStats.negative}%</span>
+                                  </div>
+                                  <Progress value={currentApp.reviewStats.negative} className="bg-gray-100" />
+                                </div>
+                              </div>
                             </div>
+
+                            <div className="p-4 bg-white rounded-lg border">
+                              <h5 className="text-base font-medium mb-4">熱門關鍵詞</h5>
+                              <div className="flex flex-wrap gap-2">
+                                {currentApp.keywordFrequency.map((item: { keyword: string; count: number }, index: number) => (
+                                  <Badge 
+                                    key={index}
+                                    variant="secondary"
+                                    className={`
+                                      ${index === 0 ? 'bg-sky-100 text-sky-800 hover:bg-sky-200' : 
+                                        index === 1 ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' :
+                                        index === 2 ? 'bg-amber-100 text-amber-800 hover:bg-amber-200' :
+                                        'bg-gray-100 text-gray-800 hover:bg-gray-200'}
+                                    `}
+                                  >
+                                    {item.keyword} ({item.count})
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+
+                            <Button 
+                              className="w-full" 
+                              variant="outline"
+                              onClick={() => setShowAnalysisSummary(currentApp.id)}
+                            >
+                              查看完整評論分析
+                            </Button>
                           </div>
                         </div>
                       </div>
@@ -1187,53 +1486,103 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                   </Card>
                 ))}
               </div>
-
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center gap-2">
-                    <CardTitle>評論關鍵詞分析</CardTitle>
-                    <CardDescription>用戶評論中最常提及的關鍵詞 (前五名)</CardDescription>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {appData.map((app) => (
-                      <div key={`${app.id}-keywords`} className="space-y-3">
-                        <div className="flex items-center gap-2">
-                          <img src={app.logo} alt={app.name} className="w-8 h-8 rounded-lg" />
-                          <div>
-                            <h4 className="font-medium">{app.name}</h4>
-                            <p className="text-sm text-muted-foreground">
-                              評論總數：{app.processedReviews.length}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {app.keywordFrequency.map((item, index) => (
-                            <Badge 
-                              key={index}
-                              variant="secondary"
-                              className={`
-                                ${index === 0 ? 'bg-sky-100 text-sky-800 hover:bg-sky-200' : 
-                                  index === 1 ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' :
-                                  index === 2 ? 'bg-amber-100 text-amber-800 hover:bg-amber-200' :
-                                  index === 3 ? 'bg-slate-100 text-slate-800 hover:bg-slate-200' :
-                                  'bg-zinc-100 text-zinc-800 hover:bg-zinc-200'}
-                                `}
-                            >
-                              {item.keyword} ({item.count})
-                            </Badge>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
             </TabsContent>
           </Tabs>
         </CardContent>
       </Card>
+
+      {showAnalysisSummary && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center overflow-y-auto py-8">
+          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full mx-4 divide-y divide-gray-100">
+            {appData.map((app) => {
+              if (app.id === showAnalysisSummary) {
+                return (
+                  <div key={app.id}>
+                    <div className="p-6">
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-3">
+                          <img src={app.logo} alt={app.name} className="w-10 h-10 rounded-lg" />
+                          <div>
+                            <h3 className="text-xl font-semibold">{app.name}</h3>
+                            <p className="text-sm text-gray-500">評論分析摘要</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setShowAnalysisSummary(null)}
+                          className="rounded-full p-2 hover:bg-gray-100 transition-colors"
+                        >
+                          <X className="h-5 w-5 text-gray-500" />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="px-6 py-4 bg-gradient-to-b from-gray-50 to-white">
+                      <div className="flex items-center gap-2 mb-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+                          <path d="M8 11h8"/>
+                          <path d="M12 15V7"/>
+                        </svg>
+                        <h4 className="font-medium text-lg">主要優勢</h4>
+                      </div>
+                      <div className="space-y-3 ml-6">
+                        {app.reviewAnalysis?.advantages.map((advantage: string, index: number) => (
+                          <div key={index} className="flex items-start gap-3 group">
+                            <div className="mt-1.5">
+                              <div className="w-2 h-2 rounded-full bg-emerald-500 group-hover:scale-125 transition-transform" />
+                            </div>
+                            <p className="text-gray-600 leading-relaxed group-hover:text-gray-900 transition-colors">{advantage}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="px-6 py-4">
+                      <div className="flex items-center gap-2 mb-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500">
+                          <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+                          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                          <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        <h4 className="font-medium text-lg">待改進項目</h4>
+                      </div>
+                      <div className="space-y-3 ml-6">
+                        {app.reviewAnalysis?.improvements.map((improvement: string, index: number) => (
+                          <div key={index} className="flex items-start gap-3 group">
+                            <div className="mt-1.5">
+                              <div className="w-2 h-2 rounded-full bg-amber-500 group-hover:scale-125 transition-transform" />
+                            </div>
+                            <p className="text-gray-600 leading-relaxed group-hover:text-gray-900 transition-colors">{improvement}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-6 bg-gradient-to-b from-gray-50 to-white">
+                      <div className="flex items-center gap-2 mb-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500">
+                          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+                        </svg>
+                        <h4 className="font-medium text-lg">整體評論摘要</h4>
+                      </div>
+                      <div className="bg-white rounded-lg border border-gray-100 p-4 shadow-sm">
+                        <p className="text-gray-600 leading-relaxed whitespace-pre-wrap">{app.reviewAnalysis?.summary}</p>
+                      </div>
+                    </div>
+
+                    <div className="p-6 flex justify-end gap-3">
+                      <Button variant="outline" onClick={() => setShowAnalysisSummary(null)}>
+                        關閉
+                      </Button>
+                    </div>
+                  </div>
+                );
+              }
+              return null;
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 } 
