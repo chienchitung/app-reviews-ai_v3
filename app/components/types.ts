@@ -11,6 +11,21 @@ export interface AppInfo {
   update_date: string;
   ios_similar_app: string | null;
   similarity: string | null;
+  reviews?: Review[];
+}
+
+export interface Review {
+  date: string;
+  username: string;
+  review: string;
+  rating: number;
+  platform: string;
+  developerResponse?: string;
+  language: string;
+  app_id: string;
+  sentiment: string[];
+  category: string[];
+  keywords: string[];
 }
 
 export interface SearchResult {

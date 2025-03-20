@@ -57,7 +57,7 @@ interface ReviewData {
     developerResponse?: string;
     language: string;
     app_id: string;
-    sentiment: string;
+    sentiment: string[];
     category: string[];
     keywords: string[];
   }>;
@@ -1876,6 +1876,18 @@ export default function ConversationalSearchFlow() {
     const processedReviews: ReviewData['reviews'] = [];
     const batchSize = 5; // 每批處理5條評論
 
+    // 檢查環境變數
+    const huggingFaceApiKey = process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY;
+    if (!huggingFaceApiKey) {
+      console.error('Hugging Face API Key 未設置');
+      return reviews.map(review => ({
+        ...review,
+        sentiment: ['未標記'],
+        category: ['未標記'],
+        keywords: []
+      }));
+    }
+
     // 批次處理評論
     for (let i = 0; i < reviews.length; i += batchSize) {
       const batch = reviews.slice(i, i + batchSize);
@@ -1895,68 +1907,80 @@ export default function ConversationalSearchFlow() {
         try {
           // 使用請求佇列處理情感分析
           const sentimentPromise = requestQueue.add(async () => {
-            const response = await fetch(
-              'https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-sentiment',
-              {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY}`,
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ inputs: review.review })
+            try {
+              const response = await fetch(
+                'https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-sentiment',
+                {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${huggingFaceApiKey}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ inputs: review.review })
+                }
+              );
+
+              if (!response.ok) {
+                console.error(`情感分析請求失敗: ${response.status}`, await response.text());
+                return '未標記';
               }
-            );
 
-            if (!response.ok) {
-              console.error(`情感分析請求失敗: ${response.status}`);
+              const result = await response.json();
+              console.log('情感分析結果:', result);
+
+              if (!Array.isArray(result) || !result[0]) {
+                console.error('情感分析返回格式不正確:', result);
+                return '未標記';
+              }
+
+              const sentiment = result[0].reduce((prev: any, current: any) => 
+                prev.score > current.score ? prev : current
+              ).label;
+
+              return sentiment;
+            } catch (error) {
+              console.error('情感分析請求錯誤:', error);
               return '未標記';
             }
-
-            const result = await response.json();
-            if (!Array.isArray(result) || !result[0]) {
-              console.error('情感分析返回格式不正確:', result);
-              return '未標記';
-            }
-
-            return result[0].reduce((prev: any, current: any) => 
-              prev.score > current.score ? prev : current
-            ).label;
-          }).catch(error => {
-            console.error('情感分析錯誤:', error);
-            return '未標記';
           });
 
           // 使用請求佇列處理分類標記
           const categoryPromise = requestQueue.add(async () => {
-            const response = await fetch(
-              'https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-multi-classification',
-              {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${process.env.NEXT_PUBLIC_HUGGING_FACE_API_KEY}`,
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ inputs: review.review })
+            try {
+              const response = await fetch(
+                'https://router.huggingface.co/hf-inference/models/jackietung/bert-base-chinese-finetuned-multi-classification',
+                {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${huggingFaceApiKey}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ inputs: review.review })
+                }
+              );
+
+              if (!response.ok) {
+                console.error(`分類標記請求失敗: ${response.status}`, await response.text());
+                return ['未標記'];
               }
-            );
 
-            if (!response.ok) {
-              console.error(`分類標記請求失敗: ${response.status}`);
+              const result = await response.json();
+              console.log('分類標記結果:', result);
+
+              if (!Array.isArray(result) || !result[0]) {
+                console.error('分類標記返回格式不正確:', result);
+                return ['未標記'];
+              }
+
+              const category = [result[0].reduce((prev: any, current: any) => 
+                prev.score > current.score ? prev : current
+              ).label];
+
+              return category;
+            } catch (error) {
+              console.error('分類標記請求錯誤:', error);
               return ['未標記'];
             }
-
-            const result = await response.json();
-            if (!Array.isArray(result) || !result[0]) {
-              console.error('分類標記返回格式不正確:', result);
-              return ['未標記'];
-            }
-
-            return [result[0].reduce((prev: any, current: any) => 
-              prev.score > current.score ? prev : current
-            ).label];
-          }).catch(error => {
-            console.error('分類標記錯誤:', error);
-            return ['未標記'];
           });
 
           // 並行處理情感分析和分類標記
@@ -1970,8 +1994,8 @@ export default function ConversationalSearchFlow() {
 
           return {
             ...review,
-            sentiment,
-            category,
+            sentiment: Array.isArray(sentiment) ? sentiment : [sentiment],
+            category: Array.isArray(category) ? category : [category],
             keywords
           };
         } catch (error) {
@@ -1995,6 +2019,14 @@ export default function ConversationalSearchFlow() {
         }
       } catch (error) {
         console.error('處理批次時發生錯誤:', error);
+        // 如果批次處理失敗，將未處理的評論標記為未處理
+        const unprocessedReviews = batch.map(review => ({
+          ...review,
+          sentiment: ['未標記'],
+          category: ['未標記'],
+          keywords: []
+        }));
+        processedReviews.push(...unprocessedReviews);
       }
     }
 
