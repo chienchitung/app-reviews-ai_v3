@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
 
-export async function POST(req: Request) {
+export async function POST(req: Request): Promise<Response> {
   try {
     console.log('Starting PPT generation process...');
     
