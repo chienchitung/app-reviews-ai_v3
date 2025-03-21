@@ -3,18 +3,12 @@ import { existsSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { stat } from 'fs/promises';
 
-type Props = {
-  params: {
-    path: string[]
-  }
-}
-
 export async function GET(
   request: NextRequest,
-  props: Props
-) {
+  { params }: { params: { path: string[] } }
+): Promise<Response> {
   try {
-    const filePath = join(process.cwd(), 'temp', ...props.params.path);
+    const filePath = join(process.cwd(), 'temp', ...params.path);
     
     if (!existsSync(filePath)) {
       return new NextResponse('File not found', { status: 404 });
@@ -27,7 +21,7 @@ export async function GET(
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         'Content-Length': stats.size.toString(),
-        'Content-Disposition': `attachment; filename="${props.params.path[props.params.path.length - 1]}"`,
+        'Content-Disposition': `attachment; filename="${params.path[params.path.length - 1]}"`,
       },
     });
   } catch (error) {
