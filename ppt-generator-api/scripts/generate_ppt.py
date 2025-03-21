@@ -16,7 +16,16 @@ from io import BytesIO
 from datetime import datetime
 
 # Set locale to handle Chinese characters
-locale.setlocale(locale.LC_ALL, 'zh_TW.UTF-8')
+try:
+    locale.setlocale(locale.LC_ALL, 'zh_TW.UTF-8')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'zh_TW')
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_ALL, '')  # Use system default locale
+        except locale.Error:
+            logger.warning("Could not set Chinese locale. Some characters might not display correctly.")
 
 # Setup logging with UTF-8 encoding
 logging.basicConfig(level=logging.INFO, encoding='utf-8')
@@ -238,6 +247,109 @@ def add_comparison_content(text_frame, app_data):
     # Add specific comparison content based on the data
     pass  # Implementation will be added based on specific comparison needs
 
+def add_chapter_slide(prs, chapter_data):
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    shapes = slide.shapes
+    
+    # Add background
+    background = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height
+    )
+    background.fill.solid()
+    background.fill.fore_color.rgb = RGBColor(255, 255, 255)
+    background.line.fill.background()
+    
+    # Add title
+    title_box = shapes.add_textbox(
+        Inches(1), Inches(0.5),
+        Inches(14), Inches(1)
+    )
+    title_frame = title_box.text_frame
+    title_para = title_frame.add_paragraph()
+    title_para.text = chapter_data["title"]
+    title_para.font.size = Pt(36)
+    title_para.font.bold = True
+    title_para.font.color.rgb = RGBColor(30, 144, 255)
+    
+    # Add content sections
+    sections = [
+        ("關鍵發現", chapter_data["keyFindings"]),
+        ("數據支持", chapter_data["dataSupport"]),
+        ("建議", chapter_data["recommendations"])
+    ]
+    
+    current_top = Inches(2)
+    for section_title, section_content in sections:
+        # Add section title
+        section_title_box = shapes.add_textbox(
+            Inches(1), current_top,
+            Inches(14), Inches(0.5)
+        )
+        section_title_frame = section_title_box.text_frame
+        section_title_para = section_title_frame.add_paragraph()
+        section_title_para.text = section_title
+        section_title_para.font.size = Pt(24)
+        section_title_para.font.bold = True
+        section_title_para.font.color.rgb = RGBColor(60, 60, 60)
+        
+        # Add section content
+        content_box = shapes.add_textbox(
+            Inches(1), current_top + Inches(0.7),
+            Inches(14), Inches(1.8)
+        )
+        content_frame = content_box.text_frame
+        content_frame.word_wrap = True
+        
+        for item in section_content:
+            p = content_frame.add_paragraph()
+            p.text = f"• {item}"
+            p.font.size = Pt(18)
+            p.font.color.rgb = RGBColor(80, 80, 80)
+        
+        current_top += Inches(2.5)
+
+def add_ending_slide(prs):
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    
+    # Add background shape
+    background = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height
+    )
+    background.fill.solid()
+    background.fill.fore_color.rgb = RGBColor(240, 248, 255)  # Light blue background
+    background.line.fill.background()
+
+    # Add decorative elements
+    left_bar = slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, 0, 0, Inches(1), prs.slide_height
+    )
+    left_bar.fill.solid()
+    left_bar.fill.fore_color.rgb = RGBColor(30, 144, 255)
+    left_bar.line.fill.background()
+
+    # Add title
+    title_box = slide.shapes.add_textbox(
+        Inches(2), Inches(3), Inches(12), Inches(1.5)
+    )
+    title_frame = title_box.text_frame
+    title_para = title_frame.add_paragraph()
+    title_para.text = "謝謝聆聽"
+    title_para.font.size = Pt(54)
+    title_para.font.bold = True
+    title_para.font.color.rgb = RGBColor(30, 144, 255)
+    title_para.alignment = PP_ALIGN.LEFT
+
+    # Add subtitle
+    subtitle_box = slide.shapes.add_textbox(
+        Inches(2), Inches(4.5), Inches(12), Inches(1)
+    )
+    subtitle_frame = subtitle_box.text_frame
+    subtitle_para = subtitle_frame.add_paragraph()
+    subtitle_para.text = "如有任何問題，歡迎提出討論"
+    subtitle_para.font.size = Pt(32)
+    subtitle_para.font.color.rgb = RGBColor(100, 100, 100)
+    subtitle_para.alignment = PP_ALIGN.LEFT
+
 def generate_competitive_analysis_ppt(input_file: str, output_file: str):
     try:
         # Load input data
@@ -250,21 +362,12 @@ def generate_competitive_analysis_ppt(input_file: str, output_file: str):
         prs = Presentation()
         set_slide_size_to_16x9(prs)
         
-        # Add title slide with current date
-        current_date = datetime.now().strftime("%Y年%m月%d日")
-        add_title_slide(prs, data["title"], current_date)
-
+        # Add title slide
+        add_title_slide(prs, data["title"], data["date"])
+        
         # Process each app
         for app in data["apps"]:
             logger.info(f"Processing app: {app['name']}")
-            app_icon_url = None
-            
-            # Get app icon URL from appInfo
-            if "appInfo" in app:
-                if app["appInfo"].get("ios"):
-                    app_icon_url = app["appInfo"]["ios"].get("icon_url")
-                elif app["appInfo"].get("android"):
-                    app_icon_url = app["appInfo"]["android"].get("icon_url")
             
             # Add section slide for app
             add_section_slide(prs, app["name"])
@@ -285,8 +388,7 @@ def generate_competitive_analysis_ppt(input_file: str, output_file: str):
                     "核心功能": app["features"]["core"],
                     "優勢": app["features"]["advantages"],
                     "待改進": app["features"]["improvements"]
-                },
-                app_icon_url
+                }
             )
 
             # UX Analysis
@@ -305,8 +407,7 @@ def generate_competitive_analysis_ppt(input_file: str, output_file: str):
                     "優勢": app["uxAnalysis"]["strengths"],
                     "待改進": app["uxAnalysis"]["improvements"],
                     "總結": app["uxAnalysis"]["summary"]
-                },
-                app_icon_url
+                }
             )
 
             # Review Analysis
@@ -317,10 +418,12 @@ def generate_competitive_analysis_ppt(input_file: str, output_file: str):
                     "優勢": app["reviews"]["analysis"]["advantages"],
                     "待改進": app["reviews"]["analysis"]["improvements"],
                     "總結": app["reviews"]["analysis"]["summary"]
-                },
-                app_icon_url
+                }
             )
-
+        
+        # Add ending slide
+        add_ending_slide(prs)
+        
         # Save presentation
         logger.info(f"Saving presentation to {output_file}")
         prs.save(output_file)
@@ -328,15 +431,4 @@ def generate_competitive_analysis_ppt(input_file: str, output_file: str):
         
     except Exception as e:
         logger.error(f"Error generating PPT: {str(e)}")
-        raise
-
-def main():
-    parser = argparse.ArgumentParser(description='Generate competitive analysis PPT')
-    parser.add_argument('--input', required=True, help='Input JSON file path')
-    parser.add_argument('--output', required=True, help='Output PPTX file path')
-    args = parser.parse_args()
-
-    generate_competitive_analysis_ppt(args.input, args.output)
-
-if __name__ == "__main__":
-    main() 
+        raise 

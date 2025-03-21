@@ -746,12 +746,19 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         setPPTProgress({ phase: '生成簡報大綱', progress: 30 });
         
         // Call PPT generation API
-        const response = await fetch('/api/generate-ppt', {
+        const apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL?.replace(/\/$/, '');
+        if (!apiUrl) {
+          throw new Error('PPT Generator API URL not configured');
+        }
+
+        // Create FormData and append the JSON file
+        const formData = new FormData();
+        const jsonBlob = new Blob([JSON.stringify(pptData)], { type: 'application/json' });
+        formData.append('input_file', jsonBlob, 'data.json');
+
+        const response = await fetch(`${apiUrl}/generate-ppt`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(pptData)
+          body: formData,
         });
 
         setPPTProgress({ phase: '設計簡報版面', progress: 60 });
@@ -761,23 +768,16 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           throw new Error(errorData.error || `PPT 生成失敗: ${response.statusText}`);
         }
 
-        const responseData = await response.json().catch(() => {
-          throw new Error('無法解析 API 回應');
-        });
-
-        if (responseData.error) {
-          throw new Error(responseData.error);
-        }
-
-        if (!responseData.url) {
-          throw new Error('未收到 PPT 文件的下載連結');
+        const responseData = await response.json();
+        if (!responseData.file_path) {
+          throw new Error('未收到 PPT 文件的路徑');
         }
 
         setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
 
         try {
           // Download the PPT file
-          const pptResponse = await fetch(responseData.url);
+          const pptResponse = await fetch(`${apiUrl}/download/${responseData.file_path.split('/').pop()}`);
           if (!pptResponse.ok) {
             throw new Error('下載 PPT 檔案失敗');
           }
@@ -786,7 +786,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = responseData.filename || 'competitive_analysis.pptx';
+          link.download = `競品分析報告_${new Date().toISOString().split('T')[0]}.pptx`;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
@@ -1031,7 +1031,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                 </div>
               </div>
               <p className="text-sm text-gray-500">
-                正在使用 PPTAgent 生成專業的競品分析簡報，請稍候...
+                正在生成專業的競品分析簡報，請稍候...
               </p>
             </div>
           </div>
