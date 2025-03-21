@@ -59,6 +59,10 @@ const nextConfig = {
           source: '/api/:path*',
           destination: '/app/api/:path*',
         },
+        {
+          source: '/temp/:path*',
+          destination: '/api/static/:path*',
+        },
       ]
     },
 }

@@ -222,8 +222,7 @@ const analyzeAppFeatures = async (app: AppData) => {
     "列出2-3點待改進項目",
     "每點描述不超過50字",
     "..."
-  ]
-}`;
+  ]}`;
 
     const response = await fetch('/api/gemini', {
       method: 'POST',
@@ -461,6 +460,159 @@ const analyzeUserExperience = async (app: AppData) => {
   }
 };
 
+const generatePPTContent = async (appData: AppData[]) => {
+  try {
+    // Format the date in zh-TW locale
+    const currentDate = new Date().toLocaleDateString('zh-TW', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    // Prepare the data for Gemini API
+    const formattedData = appData.map(app => ({
+      name: app.name,
+      ratings: {
+        ios: app.iosRating.toFixed(1),
+        android: app.androidRating.toFixed(1)
+      },
+      reviews: {
+        count: app.processedReviews.length,
+        stats: {
+          positive: app.reviewStats.positive,
+          negative: app.reviewStats.negative
+        },
+        analysis: {
+          advantages: app.reviewAnalysis?.advantages || [],
+          improvements: app.reviewAnalysis?.improvements || [],
+          summary: app.reviewAnalysis?.summary || ''
+        }
+      },
+      features: app.features || {
+        core: [],
+        advantages: [],
+        improvements: []
+      },
+      uxScores: {
+        memberlogin: app.uxScores.memberlogin,
+        search: app.uxScores.search,
+        product: app.uxScores.product,
+        checkout: app.uxScores.checkout,
+        service: app.uxScores.service,
+        other: app.uxScores.other
+      },
+      uxAnalysis: app.uxAnalysis || {
+        strengths: [],
+        improvements: [],
+        summary: ''
+      }
+    }));
+
+    const prompt = `分析以下應用程式的競品分析數據，並生成一份完整的簡報內容：
+
+應用程式資料：
+${JSON.stringify(formattedData, null, 2)}
+
+請生成一份結構完整的簡報內容，包含以下章節：
+1. 概述
+2. 功能比較
+3. 用戶體驗分析
+4. 評論分析
+5. 總結
+
+每個章節都應該包含：
+- 關鍵發現
+- 數據支持
+- 具體建議
+
+請以 JSON 格式回覆，格式如下：
+{
+  "title": "競品分析報告",
+  "date": "${currentDate}",
+  "apps": [
+    {
+      "name": "應用名稱",
+      "ratings": {
+        "ios": "iOS 評分",
+        "android": "Android 評分"
+      },
+      "reviews": {
+        "count": "評論總數",
+        "stats": {
+          "positive": "正面評價百分比",
+          "negative": "負面評價百分比"
+        },
+        "analysis": {
+          "advantages": ["優勢1", "優勢2", "優勢3"],
+          "improvements": ["改進1", "改進2", "改進3"],
+          "summary": "整體評論分析摘要"
+        }
+      },
+      "features": {
+        "core": ["核心功能1", "核心功能2", "核心功能3"],
+        "advantages": ["競爭優勢1", "競爭優勢2"],
+        "improvements": ["待改進1", "待改進2"]
+      },
+      "uxScores": {
+        "memberlogin": "會員登入評分",
+        "search": "搜尋功能評分",
+        "product": "商品相關評分",
+        "checkout": "結帳付款評分",
+        "service": "客戶服務評分"
+      },
+      "uxAnalysis": {
+        "strengths": ["優勢1", "優勢2", "優勢3"],
+        "improvements": ["改進1", "改進2", "改進3"],
+        "summary": "用戶體驗分析摘要"
+      }
+    }
+  ]
+}`;
+
+    const response = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt,
+        model: 'gemini-2.0-flash'
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`生成簡報內容失敗: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    if (data.error) {
+      throw new Error(`Gemini API 錯誤: ${data.error}`);
+    }
+
+    try {
+      const cleanResponse = data.response
+        .replace(/\`\`\`json\n?/g, '')
+        .replace(/\`\`\`\n?/g, '')
+        .trim();
+
+      const parsedData = JSON.parse(cleanResponse);
+      
+      // Validate the parsed data structure
+      if (!parsedData.title || !parsedData.date || !Array.isArray(parsedData.apps)) {
+        throw new Error('無效的簡報數據格式');
+      }
+
+      return parsedData;
+    } catch (parseError) {
+      console.error('解析 Gemini 回應時發生錯誤:', parseError);
+      throw new Error('無法解析 AI 生成的內容');
+    }
+  } catch (error) {
+    console.error('生成簡報內容時發生錯誤:', error);
+    throw error;
+  }
+};
+
 export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: CompetitiveAnalysisProps) {
   const [selectedTimeframe, setSelectedTimeframe] = useState("30days")
   const [selectedDownloadType, setSelectedDownloadType] = useState("full_report")
@@ -475,6 +627,9 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
   });
   const [expandedReviews, setExpandedReviews] = useState<{ [key: string]: boolean }>({});
   const [showAnalysisSummary, setShowAnalysisSummary] = useState<string | null>(null);
+  const [isPPTGenerating, setIsPPTGenerating] = useState(false);
+  const [pptProgress, setPPTProgress] = useState({ phase: '', progress: 0 });
+  const [error, setError] = useState<string | null>(null);
 
   const toggleAppDetails = (appId: string) => {
     if (expandedApp === appId) {
@@ -519,55 +674,138 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
   // Update download function
   const handleDownload = async () => {
     if (selectedDownloadType === 'raw_data') {
-      // Prepare data for Excel
-      const excelData = appData.map(app => {
-        const filteredReviews = filterReviewsByDate(app.processedReviews, selectedTimeframe);
-        return filteredReviews.map(review => ({
-          '應用程式': app.name,
-          '日期': review.date,
-          '評分': review.rating,
-          '平台': review.platform,
-          '評論內容': review.review,
-          '情感分析': review.sentiment.join(', '),
-          '分類': review.category.join(', ')
-        }));
-      }).flat();
+      try {
+        setError(null);
+        // Prepare data for Excel
+        const excelData = appData.map(app => {
+          const filteredReviews = filterReviewsByDate(app.processedReviews, selectedTimeframe);
+          return filteredReviews.map(review => ({
+            '應用程式': app.name,
+            '日期': review.date,
+            '評分': review.rating,
+            '平台': review.platform,
+            '評論內容': review.review,
+            '情感分析': review.sentiment.join(', '),
+            '分類': review.category.join(', ')
+          }));
+        }).flat();
 
-      // Create workbook and worksheet
-      const worksheet = xlsxUtils.json_to_sheet(excelData);
-      const workbook = xlsxUtils.book_new();
-      xlsxUtils.book_append_sheet(workbook, worksheet, '評論數據');
+        // Create workbook and worksheet
+        const worksheet = xlsxUtils.json_to_sheet(excelData);
+        const workbook = xlsxUtils.book_new();
+        xlsxUtils.book_append_sheet(workbook, worksheet, '評論數據');
 
-      // Auto-size columns
-      type RowType = typeof excelData[0];
-      const maxWidths: { [key in keyof RowType]: number } = {} as { [key in keyof RowType]: number };
-      
-      excelData.forEach(row => {
-        (Object.keys(row) as Array<keyof RowType>).forEach(key => {
-          const cellValue = row[key] ? String(row[key]) : '';
-          maxWidths[key] = Math.max(maxWidths[key] || 0, cellValue.length);
+        // Auto-size columns
+        type RowType = typeof excelData[0];
+        const maxWidths: { [key in keyof RowType]: number } = {} as { [key in keyof RowType]: number };
+        
+        excelData.forEach(row => {
+          (Object.keys(row) as Array<keyof RowType>).forEach(key => {
+            const cellValue = row[key] ? String(row[key]) : '';
+            maxWidths[key] = Math.max(maxWidths[key] || 0, cellValue.length);
+          });
         });
-      });
 
-      worksheet['!cols'] = (Object.keys(excelData[0]) as Array<keyof RowType>).map(key => ({
-        wch: Math.min(Math.max(maxWidths[key], key.length), 50)
-      }));
+        worksheet['!cols'] = (Object.keys(excelData[0]) as Array<keyof RowType>).map(key => ({
+          wch: Math.min(Math.max(maxWidths[key], key.length), 50)
+        }));
 
-      // Generate Excel file
-      const excelBuffer = xlsxWrite(workbook, { 
-        bookType: 'xlsx', 
-        type: 'array',
-        cellStyles: true
-      });
+        // Generate Excel file
+        const excelBuffer = xlsxWrite(workbook, { 
+          bookType: 'xlsx', 
+          type: 'array',
+          cellStyles: true
+        });
 
-      // Create and trigger download
-      const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `app_reviews_${new Date().toISOString().split('T')[0]}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+        // Create and trigger download
+        const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `app_reviews_${new Date().toISOString().split('T')[0]}.xlsx`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (error) {
+        console.error('匯出 Excel 時發生錯誤:', error);
+        setError('匯出 Excel 檔案時發生錯誤，請稍後再試。');
+      }
+    } else if (selectedDownloadType === 'full_report') {
+      try {
+        setError(null);
+        setIsPPTGenerating(true);
+        setPPTProgress({ phase: '分析競品數據', progress: 10 });
+
+        if (!appData || appData.length === 0) {
+          throw new Error('沒有可用的應用程式數據');
+        }
+
+        // Generate enriched content using Gemini
+        const pptData = await generatePPTContent(appData);
+        
+        console.log('準備發送到 PPT 生成 API 的數據:', JSON.stringify(pptData, null, 2));
+        setPPTProgress({ phase: '生成簡報大綱', progress: 30 });
+        
+        // Call PPT generation API
+        const response = await fetch('/api/generate-ppt', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(pptData)
+        });
+
+        setPPTProgress({ phase: '設計簡報版面', progress: 60 });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: '無法解析錯誤回應' }));
+          throw new Error(errorData.error || `PPT 生成失敗: ${response.statusText}`);
+        }
+
+        const responseData = await response.json().catch(() => {
+          throw new Error('無法解析 API 回應');
+        });
+
+        if (responseData.error) {
+          throw new Error(responseData.error);
+        }
+
+        if (!responseData.url) {
+          throw new Error('未收到 PPT 文件的下載連結');
+        }
+
+        setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
+
+        try {
+          // Download the PPT file
+          const pptResponse = await fetch(responseData.url);
+          if (!pptResponse.ok) {
+            throw new Error('下載 PPT 檔案失敗');
+          }
+
+          const blob = await pptResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = responseData.filename || 'competitive_analysis.pptx';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(url);
+          
+          setPPTProgress({ phase: '下載完成', progress: 100 });
+        } catch (downloadError) {
+          console.error('下載檔案時發生錯誤:', downloadError);
+          throw new Error('下載簡報檔案時發生錯誤，請稍後再試');
+        }
+      } catch (error) {
+        console.error('生成 PPT 時發生錯誤:', error);
+        setError(error instanceof Error ? error.message : '生成 PPT 時發生錯誤，請稍後再試。');
+      } finally {
+        setTimeout(() => {
+          setIsPPTGenerating(false);
+          setPPTProgress({ phase: '', progress: 0 });
+        }, 1000);
+      }
     }
   };
 
@@ -742,6 +980,17 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-4 mb-4">
+          <div className="flex items-center">
+            <svg className="w-5 h-5 text-red-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
       {isAnalyzing && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
           <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full mx-4">
@@ -758,6 +1007,31 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
               </div>
               <p className="text-sm text-gray-500">
                 正在處理評論數據並生成分析報告，這可能需要一些時間...
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPPTGenerating && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+          <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full mx-4">
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium">正在生成簡報</h3>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span>{pptProgress.phase}</span>
+                  <span>{pptProgress.progress}%</span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-blue-500 transition-all duration-300" 
+                    style={{ width: `${pptProgress.progress}%` }} 
+                  />
+                </div>
+              </div>
+              <p className="text-sm text-gray-500">
+                正在使用 PPTAgent 生成專業的競品分析簡報，請稍候...
               </p>
             </div>
           </div>
@@ -844,7 +1118,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
                         <div className="text-sm text-muted-foreground">
                           <div className="flex justify-between">
-                            <span>評論數</span>
+                            <span>評分則數</span>
                             <span>
                               iOS: {formatReviewCount(app.iosReviews)}, Android: {formatReviewCount(app.androidReviews)}
                             </span>
