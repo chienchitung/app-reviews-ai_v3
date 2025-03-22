@@ -9,6 +9,9 @@ from pathlib import Path
 from pydantic import BaseModel
 from typing import Dict, Any
 from scripts.generate_ppt import generate_competitive_analysis_ppt
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,13 +28,28 @@ STORAGE_DIR = os.getenv("STORAGE_DIR", "generated_ppts")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 logger.info(f"Storage directory configured at: {STORAGE_DIR}")
 
+class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.scheme == "http":
+            # Log the redirect
+            logger.info(f"Redirecting {request.url} to HTTPS")
+            https_url = str(request.url).replace("http://", "https://", 1)
+            return Response(
+                status_code=301,
+                headers={"Location": https_url}
+            )
+        return await call_next(request)
+
 app = FastAPI(
     title="PPT Generator API",
     description="API for generating competitive analysis PowerPoint presentations",
     version="1.0.0"
 )
 
-# Configure CORS
+# Add HTTPS redirect middleware
+app.add_middleware(HTTPSRedirectMiddleware)
+
+# Configure CORS with more specific settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -137,9 +155,13 @@ async def download_ppt(filename: str):
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             filename=filename
         )
-        # 添加 CORS headers
+        # Add security headers
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        # Add CORS headers
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "*"
         return response
     except Exception as e:

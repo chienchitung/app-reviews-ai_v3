@@ -762,23 +762,34 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         setPPTProgress({ phase: '生成簡報大綱', progress: 30 });
         
         // Get and validate PPT generator API URL
-        const apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL;
+        let apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL;
         if (!apiUrl) {
           throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
 
-        // Ensure HTTPS is used
-        const secureApiUrl = apiUrl.replace('http://', 'https://').replace(/\/$/, '');
+        // Ensure HTTPS is used and log the URLs
+        console.log('Original API URL:', apiUrl);
+        let secureApiUrl = apiUrl;
+        if (!secureApiUrl.startsWith('https://')) {
+          secureApiUrl = secureApiUrl.replace(/^http:\/\//, 'https://');
+        }
+        secureApiUrl = secureApiUrl.replace(/\/$/, '');
+        console.log('Secure API URL:', secureApiUrl);
+
         const generateUrl = `${secureApiUrl}/generate-ppt`;
+        console.log('Generate URL:', generateUrl);
 
         // Create FormData and append the JSON file
         const formData = new FormData();
         const jsonBlob = new Blob([JSON.stringify(pptData)], { type: 'application/json' });
         formData.append('input_file', jsonBlob, 'data.json');
 
-        // Add API key to headers if available
+        // Add API key and CORS headers
         const headers: HeadersInit = {
           'Accept': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': '*',
         };
         
         const apiKey = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_KEY;
@@ -794,6 +805,10 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
             body: formData,
             mode: 'cors',
             headers,
+            credentials: 'omit'
+          }).catch(error => {
+            console.error('Fetch error:', error);
+            throw new Error(`API 請求失敗: ${error.message}`);
           });
 
           setPPTProgress({ phase: '設計簡報版面', progress: 60 });
@@ -815,13 +830,22 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
           // Download the PPT file using HTTPS
           const downloadUrl = `${secureApiUrl}/download/${responseData.file_path}`;
+          console.log('Download URL:', downloadUrl);
+          
           const pptResponse = await fetch(downloadUrl, {
             method: 'GET',
             mode: 'cors',
+            credentials: 'omit',
             headers: {
               'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Methods': 'GET, OPTIONS',
+              'Access-Control-Allow-Headers': '*',
               ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
             },
+          }).catch(error => {
+            console.error('Download error:', error);
+            throw new Error(`下載檔案失敗: ${error.message}`);
           });
 
           if (!pptResponse.ok) {
