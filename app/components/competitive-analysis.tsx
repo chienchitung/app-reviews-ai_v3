@@ -762,12 +762,16 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         // Get and validate PPT generator API URL
         const apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL;
         if (!apiUrl) {
+          console.error('PPT Generator API URL is not configured');
           throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
 
         // Remove trailing slash if present and add the endpoint
         const baseUrl = apiUrl.replace(/\/$/, '');
         const generateUrl = `${baseUrl}/generate-ppt`;
+
+        console.log('Starting PPT generation process...');
+        console.log('Using API URL:', generateUrl);
 
         // Create FormData and append the JSON file
         const formData = new FormData();
@@ -782,66 +786,82 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         const apiKey = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_KEY;
         if (apiKey) {
           headers['Authorization'] = `Bearer ${apiKey}`;
+          console.log('API key is configured');
+        } else {
+          console.log('No API key configured');
         }
-
-        console.log('Sending request to:', generateUrl);
-        
-        const response = await fetch(generateUrl, {
-          method: 'POST',
-          body: formData,
-          mode: 'cors',
-          headers,
-        });
-
-        setPPTProgress({ phase: '設計簡報版面', progress: 60 });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('API Error Response:', errorText);
-          throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'}`);
-        }
-
-        const responseData = await response.json();
-        console.log('API Response:', responseData);
-
-        if (!responseData.file_path) {
-          throw new Error('未收到 PPT 文件的路徑');
-        }
-
-        setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
 
         try {
-          // Download the PPT file
-          const downloadUrl = `${baseUrl}/download/${responseData.file_path}`;
-          const pptResponse = await fetch(downloadUrl, {
-            method: 'GET',
+          console.log('Sending request to generate PPT...');
+          const response = await fetch(generateUrl, {
+            method: 'POST',
+            body: formData,
             mode: 'cors',
-            headers: {
-              'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-              ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
-            },
+            headers,
           });
 
-          if (!pptResponse.ok) {
-            const errorText = await pptResponse.text();
-            console.error('Download Error Response:', errorText);
-            throw new Error('下載 PPT 檔案失敗');
+          setPPTProgress({ phase: '設計簡報版面', progress: 60 });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('API Error Response:', errorText);
+            console.error('Response status:', response.status);
+            console.error('Response headers:', Object.fromEntries(response.headers.entries()));
+            throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'} (${response.status})`);
           }
 
-          const blob = await pptResponse.blob();
-          const url = window.URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = `競品分析報告_${new Date().toISOString().split('T')[0]}.pptx`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          window.URL.revokeObjectURL(url);
-          
-          setPPTProgress({ phase: '下載完成', progress: 100 });
-        } catch (downloadError) {
-          console.error('下載檔案時發生錯誤:', downloadError);
-          throw new Error('下載簡報檔案時發生錯誤，請稍後再試');
+          const responseData = await response.json();
+          console.log('API Response:', responseData);
+
+          if (!responseData.file_path) {
+            console.error('Invalid API response:', responseData);
+            throw new Error('未收到 PPT 文件的路徑');
+          }
+
+          setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
+
+          try {
+            console.log('Starting file download...');
+            const downloadUrl = `${baseUrl}/download/${responseData.file_path}`;
+            console.log('Download URL:', downloadUrl);
+            
+            const pptResponse = await fetch(downloadUrl, {
+              method: 'GET',
+              mode: 'cors',
+              headers: {
+                'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
+              },
+            });
+
+            if (!pptResponse.ok) {
+              const errorText = await pptResponse.text();
+              console.error('Download Error Response:', errorText);
+              console.error('Download status:', pptResponse.status);
+              console.error('Download headers:', Object.fromEntries(pptResponse.headers.entries()));
+              throw new Error('下載 PPT 檔案失敗');
+            }
+
+            const blob = await pptResponse.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `競品分析報告_${new Date().toISOString().split('T')[0]}.pptx`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+            
+            console.log('File download completed successfully');
+            setPPTProgress({ phase: '下載完成', progress: 100 });
+          } catch (downloadError) {
+            console.error('下載檔案時發生錯誤:', downloadError);
+            throw new Error(`下載簡報檔案時發生錯誤: ${downloadError.message}`);
+          }
+        } catch (error) {
+          console.error('生成或下載 PPT 時發生錯誤:', error);
+          setError(error instanceof Error ? error.message : '生成 PPT 時發生錯誤，請稍後再試。');
+          throw error;
         }
       } catch (error) {
         console.error('生成 PPT 時發生錯誤:', error);
