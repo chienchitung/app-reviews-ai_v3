@@ -523,7 +523,7 @@ ${JSON.stringify(formattedData, null, 2)}
 
 每個章節需包含：
 - 關鍵發現
-- 數據支持
+- 關鍵數據
 - 具體建議
 
 請以 JSON 格式回覆，格式如下：
