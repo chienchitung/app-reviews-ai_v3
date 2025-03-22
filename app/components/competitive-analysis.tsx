@@ -767,9 +767,9 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
 
-        // Remove trailing slash if present and add the endpoint
-        const baseUrl = apiUrl.replace(/\/$/, '');
-        const generateUrl = `${baseUrl}/generate-ppt`;
+        // Ensure HTTPS is used
+        const secureApiUrl = apiUrl.replace('http://', 'https://').replace(/\/$/, '');
+        const generateUrl = `${secureApiUrl}/generate-ppt`;
 
         // Create FormData and append the JSON file
         const formData = new FormData();
@@ -788,33 +788,33 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
         console.log('Sending request to:', generateUrl);
         
-        const response = await fetch(generateUrl, {
-          method: 'POST',
-          body: formData,
-          mode: 'cors',
-          headers,
-        });
-
-        setPPTProgress({ phase: '設計簡報版面', progress: 60 });
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('API Error Response:', errorText);
-          throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'}`);
-        }
-
-        const responseData = await response.json();
-        console.log('API Response:', responseData);
-
-        if (!responseData.file_path) {
-          throw new Error('未收到 PPT 文件的路徑');
-        }
-
-        setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
-
         try {
-          // Download the PPT file
-          const downloadUrl = `${baseUrl}/download/${responseData.file_path}`;
+          const response = await fetch(generateUrl, {
+            method: 'POST',
+            body: formData,
+            mode: 'cors',
+            headers,
+          });
+
+          setPPTProgress({ phase: '設計簡報版面', progress: 60 });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('API Error Response:', errorText);
+            throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'}`);
+          }
+
+          const responseData = await response.json();
+          console.log('API Response:', responseData);
+
+          if (!responseData.file_path) {
+            throw new Error('未收到 PPT 文件的路徑');
+          }
+
+          setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
+
+          // Download the PPT file using HTTPS
+          const downloadUrl = `${secureApiUrl}/download/${responseData.file_path}`;
           const pptResponse = await fetch(downloadUrl, {
             method: 'GET',
             mode: 'cors',
@@ -841,9 +841,9 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           window.URL.revokeObjectURL(url);
           
           setPPTProgress({ phase: '下載完成', progress: 100 });
-        } catch (downloadError) {
-          console.error('下載檔案時發生錯誤:', downloadError);
-          throw new Error('下載簡報檔案時發生錯誤，請稍後再試');
+        } catch (apiError) {
+          console.error('API 請求或下載過程中發生錯誤:', apiError);
+          throw new Error(apiError instanceof Error ? apiError.message : '與伺服器通訊時發生錯誤，請稍後再試');
         }
       } catch (error) {
         console.error('生成 PPT 時發生錯誤:', error);
