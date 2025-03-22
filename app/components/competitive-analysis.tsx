@@ -520,7 +520,7 @@ ${JSON.stringify(formattedData, null, 2)}
 4. 評論分析
 5. 總結
 
-每個章節都應該包含：
+每個章節需包含：
 - 關鍵發現
 - 數據支持
 - 具體建議
@@ -529,6 +529,21 @@ ${JSON.stringify(formattedData, null, 2)}
 {
   "title": "競品分析報告",
   "date": "${currentDate}",
+  "summary": {
+    "dataSupport": [
+      "請列出3-4個最關鍵的數據指標及其影響"
+    ],
+    "keyFindings": [
+      "各應用在功能與技術方面的差異化優勢",
+      "用戶體驗評分的主要差距",
+      "用戶反饋的核心痛點"
+    ],
+    "recommendations": [
+      "最優先需要改進的功能領域",
+      "提升用戶體驗的關鍵行動項目",
+      "長期競爭力提升建議"
+    ]
+  },
   "apps": [
     {
       "name": "應用名稱",
@@ -742,33 +757,53 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         // Generate enriched content using Gemini
         const pptData = await generatePPTContent(appData);
         
-        console.log('準備發送到 PPT 生成 API 的數據:', JSON.stringify(pptData, null, 2));
         setPPTProgress({ phase: '生成簡報大綱', progress: 30 });
         
-        // Call PPT generation API
-        const apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL?.replace(/\/$/, '');
+        // Get and validate PPT generator API URL
+        const apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL;
         if (!apiUrl) {
-          throw new Error('PPT Generator API URL not configured');
+          throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
+
+        // Remove trailing slash if present and add the endpoint
+        const baseUrl = apiUrl.replace(/\/$/, '');
+        const generateUrl = `${baseUrl}/generate-ppt`;
 
         // Create FormData and append the JSON file
         const formData = new FormData();
         const jsonBlob = new Blob([JSON.stringify(pptData)], { type: 'application/json' });
         formData.append('input_file', jsonBlob, 'data.json');
 
-        const response = await fetch(`${apiUrl}/generate-ppt`, {
+        // Add API key to headers if available
+        const headers: HeadersInit = {
+          'Accept': 'application/json',
+        };
+        
+        const apiKey = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_KEY;
+        if (apiKey) {
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+
+        console.log('Sending request to:', generateUrl);
+        
+        const response = await fetch(generateUrl, {
           method: 'POST',
           body: formData,
+          mode: 'cors',
+          headers,
         });
 
         setPPTProgress({ phase: '設計簡報版面', progress: 60 });
 
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: '無法解析錯誤回應' }));
-          throw new Error(errorData.error || `PPT 生成失敗: ${response.statusText}`);
+          const errorText = await response.text();
+          console.error('API Error Response:', errorText);
+          throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'}`);
         }
 
         const responseData = await response.json();
+        console.log('API Response:', responseData);
+
         if (!responseData.file_path) {
           throw new Error('未收到 PPT 文件的路徑');
         }
@@ -777,8 +812,19 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
 
         try {
           // Download the PPT file
-          const pptResponse = await fetch(`${apiUrl}/download/${responseData.file_path.split('/').pop()}`);
+          const downloadUrl = `${baseUrl}/download/${responseData.file_path}`;
+          const pptResponse = await fetch(downloadUrl, {
+            method: 'GET',
+            mode: 'cors',
+            headers: {
+              'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
+            },
+          });
+
           if (!pptResponse.ok) {
+            const errorText = await pptResponse.text();
+            console.error('Download Error Response:', errorText);
             throw new Error('下載 PPT 檔案失敗');
           }
 
