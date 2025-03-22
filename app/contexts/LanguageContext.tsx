@@ -198,7 +198,7 @@ const translations: Translations = {
     'or': '或',
     
     // 首頁
-    'home.hero.title': 'AppReviews AI',
+    'home.hero.title': '透過 AI 洞察評論，快速掌握用戶需求',
     'home.hero.subtitle': '整合 Apple Store 與 Google Play 的評論數據，提供深入的用戶反饋分析',
     'home.features.title': '平台特色',
     'home.features.autoScraping.title': '自動化爬取',
@@ -689,7 +689,7 @@ const translations: Translations = {
     'or': 'or',
     
     // Home Page
-    'home.hero.title': 'AppReviews AI',
+    'home.hero.title': 'Smarter Insights, Faster Decisions',
     'home.hero.subtitle': 'Integrate and analyze user reviews from Apple Store and Google Play with deep insights',
     'home.features.title': 'Features',
     'home.features.autoScraping.title': 'Automated Scraping',
