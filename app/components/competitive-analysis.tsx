@@ -766,8 +766,13 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
 
-        // Ensure HTTPS
-        const baseUrl = apiUrl.replace(/\/$/, '').replace(/^http:/, 'https:');
+        // Ensure HTTPS and validate URL format
+        if (!apiUrl.startsWith('https://')) {
+          console.error('PPT Generator API URL must use HTTPS');
+          throw new Error('PPT Generator API URL 必須使用 HTTPS 協議');
+        }
+
+        const baseUrl = apiUrl.replace(/\/$/, '');
         const generateUrl = `${baseUrl}/generate-ppt`;
 
         console.log('Starting PPT generation process...');
@@ -781,6 +786,7 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         // Add API key to headers if available
         const headers: HeadersInit = {
           'Accept': 'application/json',
+          'Origin': window.location.origin,
         };
         
         const apiKey = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_KEY;
@@ -797,7 +803,11 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
             method: 'POST',
             body: formData,
             mode: 'cors',
+            credentials: 'include',  // Changed from 'omit' to 'include'
             headers,
+          }).catch((networkError) => {
+            console.error('Network error:', networkError);
+            throw new Error(`網路連線錯誤: ${networkError.message}`);
           });
 
           setPPTProgress({ phase: '設計簡報版面', progress: 60 });
@@ -828,8 +838,10 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
             const pptResponse = await fetch(downloadUrl, {
               method: 'GET',
               mode: 'cors',
+              credentials: 'include',  // Changed from 'omit' to 'include'
               headers: {
                 'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                'Origin': window.location.origin,
                 ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
               },
             });
