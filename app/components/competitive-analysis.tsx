@@ -472,6 +472,7 @@ const generatePPTContent = async (appData: AppData[]) => {
     // Prepare the data for Gemini API
     const formattedData = appData.map(app => ({
       name: app.name,
+      logo: app.logo,
       ratings: {
         ios: app.iosRating.toFixed(1),
         android: app.androidRating.toFixed(1)
@@ -547,6 +548,7 @@ ${JSON.stringify(formattedData, null, 2)}
   "apps": [
     {
       "name": "應用名稱",
+      "logo": "應用程式圖標URL",
       "ratings": {
         "ios": "iOS 評分",
         "android": "Android 評分"
@@ -762,21 +764,12 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         // Get and validate PPT generator API URL
         const apiUrl = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_URL;
         if (!apiUrl) {
-          console.error('PPT Generator API URL is not configured');
           throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
 
-        // Ensure HTTPS and validate URL format
-        if (!apiUrl.startsWith('https://')) {
-          console.error('PPT Generator API URL must use HTTPS');
-          throw new Error('PPT Generator API URL 必須使用 HTTPS 協議');
-        }
-
+        // Remove trailing slash if present and add the endpoint
         const baseUrl = apiUrl.replace(/\/$/, '');
         const generateUrl = `${baseUrl}/generate-ppt`;
-
-        console.log('Starting PPT generation process...');
-        console.log('Using API URL:', generateUrl);
 
         // Create FormData and append the JSON file
         const formData = new FormData();
@@ -786,98 +779,71 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
         // Add API key to headers if available
         const headers: HeadersInit = {
           'Accept': 'application/json',
-          'Origin': window.location.origin,
         };
         
         const apiKey = process.env.NEXT_PUBLIC_PPT_GENERATOR_API_KEY;
         if (apiKey) {
           headers['Authorization'] = `Bearer ${apiKey}`;
-          console.log('API key is configured');
-        } else {
-          console.log('No API key configured');
         }
 
+        console.log('Sending request to:', generateUrl);
+        
+        const response = await fetch(generateUrl, {
+          method: 'POST',
+          body: formData,
+          mode: 'cors',
+          headers,
+        });
+
+        setPPTProgress({ phase: '設計簡報版面', progress: 60 });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('API Error Response:', errorText);
+          throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'}`);
+        }
+
+        const responseData = await response.json();
+        console.log('API Response:', responseData);
+
+        if (!responseData.file_path) {
+          throw new Error('未收到 PPT 文件的路徑');
+        }
+
+        setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
+
         try {
-          console.log('Sending request to generate PPT...');
-          const response = await fetch(generateUrl, {
-            method: 'POST',
-            body: formData,
+          // Download the PPT file
+          const downloadUrl = `${baseUrl}/download/${responseData.file_path}`;
+          const pptResponse = await fetch(downloadUrl, {
+            method: 'GET',
             mode: 'cors',
-            credentials: 'include',  // Changed from 'omit' to 'include'
-            headers,
-          }).catch((networkError) => {
-            console.error('Network error:', networkError);
-            throw new Error(`網路連線錯誤: ${networkError.message}`);
+            headers: {
+              'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
+            },
           });
 
-          setPPTProgress({ phase: '設計簡報版面', progress: 60 });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error Response:', errorText);
-            console.error('Response status:', response.status);
-            console.error('Response headers:', Object.fromEntries(response.headers.entries()));
-            throw new Error(`PPT 生成失敗: ${response.statusText || '伺服器錯誤'} (${response.status})`);
+          if (!pptResponse.ok) {
+            const errorText = await pptResponse.text();
+            console.error('Download Error Response:', errorText);
+            throw new Error('下載 PPT 檔案失敗');
           }
 
-          const responseData = await response.json();
-          console.log('API Response:', responseData);
-
-          if (!responseData.file_path) {
-            console.error('Invalid API response:', responseData);
-            throw new Error('未收到 PPT 文件的路徑');
-          }
-
-          setPPTProgress({ phase: '下載簡報檔案', progress: 90 });
-
-          try {
-            console.log('Starting file download...');
-            const downloadUrl = `${baseUrl}/download/${responseData.file_path}`;
-            console.log('Download URL:', downloadUrl);
-            
-            const pptResponse = await fetch(downloadUrl, {
-              method: 'GET',
-              mode: 'cors',
-              credentials: 'include',  // Changed from 'omit' to 'include'
-              headers: {
-                'Accept': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                'Origin': window.location.origin,
-                ...(apiKey && { 'Authorization': `Bearer ${apiKey}` }),
-              },
-            });
-
-            if (!pptResponse.ok) {
-              const errorText = await pptResponse.text();
-              console.error('Download Error Response:', errorText);
-              console.error('Download status:', pptResponse.status);
-              console.error('Download headers:', Object.fromEntries(pptResponse.headers.entries()));
-              throw new Error('下載 PPT 檔案失敗');
-            }
-
-            const blob = await pptResponse.blob();
-            const url = window.URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `競品分析報告_${new Date().toISOString().split('T')[0]}.pptx`;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            window.URL.revokeObjectURL(url);
-            
-            console.log('File download completed successfully');
-            setPPTProgress({ phase: '下載完成', progress: 100 });
-          } catch (downloadError) {
-            console.error('下載檔案時發生錯誤:', downloadError);
-            if (downloadError instanceof Error) {
-              throw new Error(`下載簡報檔案時發生錯誤: ${downloadError.message}`);
-            } else {
-              throw new Error('下載簡報檔案時發生未知錯誤');
-            }
-          }
-        } catch (error) {
-          console.error('生成或下載 PPT 時發生錯誤:', error);
-          setError(error instanceof Error ? error.message : '生成 PPT 時發生錯誤，請稍後再試。');
-          throw error;
+          const blob = await pptResponse.blob();
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `競品分析報告_${new Date().toISOString().split('T')[0]}.pptx`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(url);
+          
+          setPPTProgress({ phase: '下載完成', progress: 100 });
+        } catch (downloadError) {
+          console.error('下載檔案時發生錯誤:', downloadError);
+          throw new Error('下載簡報檔案時發生錯誤，請稍後再試');
         }
       } catch (error) {
         console.error('生成 PPT 時發生錯誤:', error);
