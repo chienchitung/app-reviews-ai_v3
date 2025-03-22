@@ -766,8 +766,8 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           throw new Error('PPT Generator API URL 未設定，請檢查環境配置');
         }
 
-        // Remove trailing slash if present and add the endpoint
-        const baseUrl = apiUrl.replace(/\/$/, '');
+        // Ensure HTTPS
+        const baseUrl = apiUrl.replace(/\/$/, '').replace(/^http:/, 'https:');
         const generateUrl = `${baseUrl}/generate-ppt`;
 
         console.log('Starting PPT generation process...');
