@@ -856,7 +856,11 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
             setPPTProgress({ phase: '下載完成', progress: 100 });
           } catch (downloadError) {
             console.error('下載檔案時發生錯誤:', downloadError);
-            throw new Error(`下載簡報檔案時發生錯誤: ${downloadError.message}`);
+            if (downloadError instanceof Error) {
+              throw new Error(`下載簡報檔案時發生錯誤: ${downloadError.message}`);
+            } else {
+              throw new Error('下載簡報檔案時發生未知錯誤');
+            }
           }
         } catch (error) {
           console.error('生成或下載 PPT 時發生錯誤:', error);
