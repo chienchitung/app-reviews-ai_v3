@@ -1,18 +1,24 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'APP評論分析平台',
+  title: 'AppReviews AI',
   description: '整合 Apple Store 與 Google Play 的評論數據，提供深入的用戶反饋分析',
   keywords: 'APP評論, 數據分析, 用戶反饋, Apple Store, Google Play',
-  authors: [{ name: 'APP評論分析平台團隊' }],
+  authors: [{ name: 'AppReviews AI團隊' }],
   robots: 'index, follow',
+  icons: {
+    icon: [
+      { url: '/favicon.ico' },
+    ],
+
+  },
   openGraph: {
     type: 'website',
     locale: 'zh_TW',
-    url: 'https://app-reviews-ai-v2.vercel.app',
-    title: 'APP評論分析平台',
+    url: 'https://appreviewsai.me',
+    title: 'AppReviews AI',
     description: '整合 Apple Store 與 Google Play 的評論數據，提供深入的用戶反饋分析',
-    siteName: 'APP評論分析平台'
+    siteName: 'AppReviews AI'
   }
 };
 
