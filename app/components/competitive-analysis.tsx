@@ -28,6 +28,15 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { SearchResult } from './types'
 import { utils as xlsxUtils, write as xlsxWrite } from 'xlsx';
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableCell,
+  TableBody
+} from "./ui/table"
+import { Star as StarIcon } from "lucide-react"
 
 interface AppInfo {
   platform: string;
@@ -95,6 +104,18 @@ interface AppData {
     strengths: string[];
     improvements: string[];
     summary: string;
+  };
+  comparisonData?: {
+    core_feature: string;
+    unique_selling_point: string;
+    main_advantage: string;
+    main_disadvantage: string;
+    total_score: number;
+    positioning_matrix?: {
+      satisfaction_score: number; // 用戶滿意度得分 (0-100)
+      completeness_score: number; // 功能完整性得分 (0-100)
+      market_position: string; // 市場定位描述
+    };
   };
 }
 
@@ -460,6 +481,108 @@ const analyzeUserExperience = async (app: AppData) => {
   }
 };
 
+const generateComparisonData = async (app: AppData) => {
+  try {
+    // 計算用戶滿意度得分 (0-100)
+    // 1. 將評分轉換為百分比 (0-100)
+    const avgRating = ((app.iosRating + app.androidRating) / 2);
+    const ratingScore = (avgRating / 5) * 100;
+    
+    // 2. 正面評價比例已經是百分比形式，直接使用
+    const positivePercentage = app.reviewStats.positive;
+    
+    // 3. 按權重計算總分 (正面評價 60%, 評分 40%)
+    const satisfactionScore = Math.min(100, Math.max(0, Math.round(
+      positivePercentage * 0.6 + ratingScore * 0.4
+    )));
+
+    // 計算功能完整性得分 (0-100)
+    const completenessScore = Math.round(
+      (app.uxScores.memberlogin * 0.15) +
+      (app.uxScores.search * 0.20) +
+      (app.uxScores.product * 0.25) +
+      (app.uxScores.checkout * 0.20) +
+      (app.uxScores.service * 0.15) +
+      (app.uxScores.other * 0.05)
+    );
+
+    const prompt = `分析以下應用程式的特點：
+
+應用名稱：${app.name}
+類別：${app.appInfo?.ios?.category || app.appInfo?.android?.category}
+評分：iOS ${app.iosRating}，Android ${app.androidRating}
+功能特點：${JSON.stringify(app.features)}
+用戶評論：${JSON.stringify(app.reviewAnalysis)}
+用戶滿意度：${satisfactionScore}%
+功能完整性：${completenessScore}%
+
+請生成以下內容：
+1. 核心功能：最重要的功能特點（限15字內）
+2. 獨特賣點：與競品最大的差異化特點（限15字內）
+3. 主要優勢：最突出的優勢（限15字內）
+4. 主要劣勢：最需要改進的方面（限15字內）
+5. 市場定位：根據用戶滿意度(${satisfactionScore}%)和功能完整性(${completenessScore}%)，描述產品的市場定位（限20字內）
+
+請以 JSON 格式回覆，格式如下：
+{
+  "core_feature": "核心功能描述",
+  "unique_selling_point": "獨特賣點描述",
+  "main_advantage": "主要優勢描述",
+  "main_disadvantage": "主要劣勢描述",
+  "market_position": "市場定位描述"
+}`;
+
+    const response = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        prompt,
+        model: 'gemini-2.0-flash-thinking-exp-01-21'
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('分析請求失敗');
+    }
+
+    const data = await response.json();
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
+    const cleanResponse = data.response
+      .replace(/\`\`\`json\n?/g, '')
+      .replace(/\`\`\`\n?/g, '')
+      .trim();
+
+    const parsedData = JSON.parse(cleanResponse);
+
+    return {
+      ...parsedData,
+      positioning_matrix: {
+        satisfaction_score: satisfactionScore,
+        completeness_score: completenessScore,
+        market_position: parsedData.market_position
+      }
+    };
+  } catch (error) {
+    console.error('生成比較數據時發生錯誤:', error);
+    return {
+      core_feature: '資料分析中...',
+      unique_selling_point: '資料分析中...',
+      main_advantage: '資料分析中...',
+      main_disadvantage: '資料分析中...',
+      positioning_matrix: {
+        satisfaction_score: 0,
+        completeness_score: 0,
+        market_position: '資料分析中...'
+      }
+    };
+  }
+};
+
 const generatePPTContent = async (appData: AppData[]) => {
   try {
     // Format the date in zh-TW locale
@@ -628,6 +751,128 @@ ${JSON.stringify(formattedData, null, 2)}
     console.error('生成簡報內容時發生錯誤:', error);
     throw error;
   }
+};
+
+const SolutionsSection = ({ app }: { app: AppData }) => {
+  const [solutions, setSolutions] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchSolutions = async () => {
+      try {
+        const prompt = `分析以下應用程式的數據，並提供具體的改進建議：
+
+應用名稱：${app.name}
+用戶滿意度：${app.comparisonData?.positioning_matrix?.satisfaction_score}%
+功能完整性：${app.comparisonData?.positioning_matrix?.completeness_score}%
+
+用戶體驗評分：
+- 會員登入: ${app.uxScores.memberlogin}%
+- 搜尋功能: ${app.uxScores.search}%
+- 商品相關: ${app.uxScores.product}%
+- 結帳付款: ${app.uxScores.checkout}%
+- 客戶服務: ${app.uxScores.service}%
+- 其他功能: ${app.uxScores.other}%
+
+主要優勢：${app.comparisonData?.main_advantage || '無'}
+主要劣勢：${app.comparisonData?.main_disadvantage || '無'}
+市場定位：${app.comparisonData?.positioning_matrix?.market_position || '無'}
+
+用戶評論分析：
+${app.reviewAnalysis?.summary || '無'}
+
+請提供3-4點具體的改進建議，每點建議需包含：
+1. 問題描述（具體指出需要改進的問題）
+2. 改進方向（提供明確的改進方向）
+3. 預期效果（說明改進後預期達到的效果）
+
+請以 JSON 格式回覆，格式如下：
+{
+  "solutions": [
+    {
+      "problem": "問題描述",
+      "solution": "改進方向",
+      "expected_result": "預期效果"
+    }
+  ]
+}`;
+
+        const response = await fetch('/api/gemini', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prompt,
+            model: 'gemini-2.0-flash'
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('分析請求失敗');
+        }
+
+        const data = await response.json();
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        const cleanResponse = data.response
+          .replace(/\`\`\`json\n?/g, '')
+          .replace(/\`\`\`\n?/g, '')
+          .trim();
+
+        const parsedData = JSON.parse(cleanResponse);
+        setSolutions(parsedData.solutions);
+      } catch (error) {
+        console.error('生成改進建議時發生錯誤:', error);
+        setError('無法生成改進建議，請稍後再試。');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchSolutions();
+  }, [app]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-gray-500 text-center py-4">
+        {error}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {solutions.map((solution, index) => (
+        <div key={index} className="space-y-3">
+          <h5 className="font-medium text-gray-900">{solution.problem}</h5>
+          <div className="text-sm text-gray-600">
+            <p className="mb-2">改進方向：</p>
+            {solution.solution.split('、').map((item: string, i: number) => (
+              <div key={i} className="ml-4 mb-1">• {item.trim()}</div>
+            ))}
+          </div>
+          <div className="text-sm text-gray-600">
+            <p className="mb-2">預期效果：</p>
+            {solution.expected_result.split('、').map((item: string, i: number) => (
+              <div key={i} className="ml-4 mb-1">• {item.trim()}</div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 };
 
 export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: CompetitiveAnalysisProps) {
@@ -974,11 +1219,19 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
             // 使用 Gemini 分析用戶體驗
             const uxAnalysis = await analyzeUserExperience(baseData);
             
+            // 生成比較數據
+            const comparisonData = await generateComparisonData(baseData);
+            const totalScore = Object.values(baseData.uxScores).reduce((sum, score) => sum + score, 0);
+            
             return {
               ...baseData,
               features,
               reviewAnalysis,
-              uxAnalysis
+              uxAnalysis,
+              comparisonData: {
+                ...comparisonData,
+                total_score: totalScore
+              }
             };
           })
         );
@@ -1049,6 +1302,103 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
   const appColorMap = Object.fromEntries(
     appData.map((app, index) => [app.name, COLORS[index % COLORS.length]])
   );
+
+  const generateSolutionsForApp = async (app: AppData) => {
+    try {
+      const prompt = `分析以下應用程式的數據，並提供具體的改進建議：
+
+應用名稱：${app.name}
+用戶滿意度：${app.comparisonData?.positioning_matrix?.satisfaction_score}%
+功能完整性：${app.comparisonData?.positioning_matrix?.completeness_score}%
+
+用戶體驗評分：
+- 會員登入: ${app.uxScores.memberlogin}%
+- 搜尋功能: ${app.uxScores.search}%
+- 商品相關: ${app.uxScores.product}%
+- 結帳付款: ${app.uxScores.checkout}%
+- 客戶服務: ${app.uxScores.service}%
+- 其他功能: ${app.uxScores.other}%
+
+主要優勢：${app.comparisonData?.main_advantage || '無'}
+主要劣勢：${app.comparisonData?.main_disadvantage || '無'}
+市場定位：${app.comparisonData?.positioning_matrix?.market_position || '無'}
+
+用戶評論分析：
+${app.reviewAnalysis?.summary || '無'}
+
+請提供3-4點具體的改進建議，每點建議需包含：
+1. 問題描述（具體指出需要改進的問題）
+2. 改進方向（提供明確的改進方向）
+3. 預期效果（說明改進後預期達到的效果）
+
+請以 JSON 格式回覆，格式如下：
+{
+  "solutions": [
+    {
+      "problem": "問題描述",
+      "solution": "改進方向",
+      "expected_result": "預期效果"
+    }
+  ]
+}`;
+
+      const response = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt,
+          model: 'gemini-2.0-flash-thinking-exp-01-21'
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('分析請求失敗');
+      }
+
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      const cleanResponse = data.response
+        .replace(/\`\`\`json\n?/g, '')
+        .replace(/\`\`\`\n?/g, '')
+        .trim();
+
+      const parsedData = JSON.parse(cleanResponse);
+
+      return (
+        <div className="space-y-6">
+          {parsedData.solutions.map((solution: any, index: number) => (
+            <div key={index} className="space-y-3">
+              <h5 className="font-medium text-gray-900">{solution.problem}</h5>
+              <div className="text-sm text-gray-600">
+                <p className="mb-2">改進方向：</p>
+                {solution.solution.split('、').map((item: string, i: number) => (
+                  <div key={i} className="ml-4 mb-1">• {item.trim()}</div>
+                ))}
+              </div>
+              <div className="text-sm text-gray-600">
+                <p className="mb-2">預期效果：</p>
+                {solution.expected_result.split('、').map((item: string, i: number) => (
+                  <div key={i} className="ml-4 mb-1">• {item.trim()}</div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    } catch (error) {
+      console.error('生成改進建議時發生錯誤:', error);
+      return (
+        <div className="text-gray-500 text-center py-4">
+          暫時無法生成改進建議，請稍後再試。
+        </div>
+      );
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -1226,11 +1576,12 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
           </div>
 
           <Tabs defaultValue="overview" className="w-full">
-            <TabsList className="grid w-full grid-cols-4 bg-gray-100">
+            <TabsList className="grid w-full grid-cols-5 bg-gray-100">
               <TabsTrigger value="overview" className="data-[state=active]:bg-white">總覽</TabsTrigger>
               <TabsTrigger value="features" className="data-[state=active]:bg-white">功能比較</TabsTrigger>
               <TabsTrigger value="ux" className="data-[state=active]:bg-white">用戶體驗</TabsTrigger>
               <TabsTrigger value="reviews" className="data-[state=active]:bg-white">評論分析</TabsTrigger>
+              <TabsTrigger value="comparison" className="data-[state=active]:bg-white">比較表</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="space-y-4">
@@ -1907,6 +2258,280 @@ export default function CompetitiveAnalysis({ selectedApps = [], onGoBack }: Com
                   </Card>
                 ))}
               </div>
+            </TabsContent>
+
+            <TabsContent value="comparison" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>應用程式比較表</CardTitle>
+                  <CardDescription>各應用程式的核心功能、評分與特點比較</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                    <div>
+                      <h3 className="text-lg font-semibold mb-4">市場定位矩陣</h3>
+                      <div className="relative aspect-square bg-gray-50 rounded-lg p-4 border">
+                        <div className="absolute inset-0 p-4">
+                          {/* Y軸標籤 */}
+                          <div className="absolute -left-12 top-1/2 -translate-y-1/2 -rotate-90 text-sm font-medium text-gray-500">
+                            用戶滿意度
+                          </div>
+                          {/* X軸標籤 */}
+                          <div className="absolute bottom-0 left-1/2 -translate-x-1/2 text-sm font-medium text-gray-500">
+                            功能完整性
+                          </div>
+                          {/* 象限分隔線 */}
+                          <div className="absolute left-1/2 top-0 bottom-0 border-l border-dashed border-gray-300" />
+                          <div className="absolute top-1/2 left-0 right-0 border-t border-dashed border-gray-300" />
+                          {/* 象限標籤 */}
+                          <div className="absolute top-4 left-4 text-xs text-gray-500">潛力型</div>
+                          <div className="absolute top-4 right-4 text-xs text-gray-500">領導型</div>
+                          <div className="absolute bottom-4 left-4 text-xs text-gray-500">待改進</div>
+                          <div className="absolute bottom-4 right-4 text-xs text-gray-500">成熟型</div>
+                          {/* 應用程式位置點 */}
+                          {appData.map((app) => {
+                            const matrix = app.comparisonData?.positioning_matrix;
+                            if (!matrix) return null;
+                            
+                            const x = (matrix.completeness_score / 100) * 100;
+                            const y = (matrix.satisfaction_score / 100) * 100;
+                            const color = appColorMap[app.name];
+                            
+                            return (
+                              <div
+                                key={`${app.id}-position`}
+                                className="absolute w-24 transition-all duration-300"
+                                style={{
+                                  left: `${x}%`,
+                                  bottom: `${y}%`,
+                                  transform: 'translate(-50%, 50%)'
+                                }}
+                              >
+                                <div
+                                  className="w-3 h-3 rounded-full mx-auto mb-1"
+                                  style={{ backgroundColor: color }}
+                                />
+                                <div className="text-xs text-center font-medium" style={{ color }}>
+                                  {app.name}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold mb-4">市場定位分析</h3>
+                      <div className="space-y-4">
+                        {appData.map((app) => (
+                          <div key={`${app.id}-position-analysis`} className="p-4 bg-gray-50 rounded-lg border">
+                            <div className="flex items-center gap-3 mb-3">
+                              <div
+                                className="w-3 h-3 rounded-full"
+                                style={{ backgroundColor: appColorMap[app.name] }}
+                              />
+                              <h4 className="font-medium">{app.name}</h4>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between text-sm">
+                                <span className="text-gray-500">用戶滿意度</span>
+                                <span className="font-medium">
+                                  {app.comparisonData?.positioning_matrix?.satisfaction_score || 0}%
+                                </span>
+                              </div>
+                              <Progress
+                                value={app.comparisonData?.positioning_matrix?.satisfaction_score || 0}
+                                className="bg-gray-100"
+                              />
+                              <div className="flex justify-between text-sm">
+                                <span className="text-gray-500">功能完整性</span>
+                                <span className="font-medium">
+                                  {app.comparisonData?.positioning_matrix?.completeness_score || 0}%
+                                </span>
+                              </div>
+                              <Progress
+                                value={app.comparisonData?.positioning_matrix?.completeness_score || 0}
+                                className="bg-gray-100"
+                              />
+                              <p className="text-sm mt-2 text-gray-600">
+                                {app.comparisonData?.positioning_matrix?.market_position || '分析中...'}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto mb-6">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[100px]">應用程式</TableHead>
+                          <TableHead>平均評分</TableHead>
+                          <TableHead>核心功能</TableHead>
+                          <TableHead>獨特賣點</TableHead>
+                          <TableHead className="text-green-600">主要優勢</TableHead>
+                          <TableHead className="text-red-600">主要劣勢</TableHead>
+                          <TableHead>綜合得分</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {appData.map((app) => (
+                          <TableRow key={app.id}>
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-2">
+                                <img src={app.logo} alt={app.name} className="w-8 h-8 rounded" />
+                                {app.name}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <StarIcon className="w-4 h-4 text-yellow-400" />
+                                {((app.iosRating + app.androidRating) / 2).toFixed(1)}
+                              </div>
+                            </TableCell>
+                            <TableCell>{app.comparisonData?.core_feature || '分析中...'}</TableCell>
+                            <TableCell>{app.comparisonData?.unique_selling_point || '分析中...'}</TableCell>
+                            <TableCell className="text-green-600">{app.comparisonData?.main_advantage || '分析中...'}</TableCell>
+                            <TableCell className="text-red-600">{app.comparisonData?.main_disadvantage || '分析中...'}</TableCell>
+                            <TableCell>
+                              {(() => {
+                                const totalScore = Math.round(
+                                  (app.uxScores.memberlogin
+                                  + app.uxScores.search
+                                  + app.uxScores.product
+                                  + app.uxScores.checkout
+                                  + app.uxScores.service
+                                  + app.uxScores.other) / 6
+                                );
+                                const scoreColor = totalScore >= 80 ? 'text-green-600' :
+                                                 totalScore >= 60 ? 'text-blue-600' :
+                                                 totalScore >= 40 ? 'text-orange-500' : 'text-red-500';
+                                return (
+                                  <div className="flex items-center justify-center">
+                                    <span className={`text-lg font-semibold ${scoreColor}`}>
+                                      {totalScore}
+                                    </span>
+                                  </div>
+                                );
+                              })()}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  <Card className="mb-6">
+                    <CardHeader>
+                      <CardTitle>具體改進建議</CardTitle>
+                      <CardDescription>基於競品分析的具體改進方向與解決方案</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 gap-6">
+                        {appData.map((app) => (
+                          <div key={`${app.id}-solutions`} className="p-6 bg-gray-50 rounded-lg border">
+                            <div className="flex items-center gap-4 mb-6">
+                              <img src={app.logo} alt={app.name} className="w-12 h-12 rounded-lg shadow-sm" />
+                              <div>
+                                <h4 className="text-xl font-semibold text-gray-900">{app.name}</h4>
+                                <p className="text-sm text-gray-500">改進建議與優化方向</p>
+                              </div>
+                            </div>
+                            
+                            {app.uxScores.service === 0 && (
+                              <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-lg">
+                                <div className="flex items-center gap-2 text-red-600 mb-2">
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                  </svg>
+                                  <span className="font-medium">急需改進項目</span>
+                                </div>
+                                <p className="text-sm text-red-700">客戶服務功能評分為0，建議優先處理此項目</p>
+                              </div>
+                            )}
+
+                            <div className="space-y-6">
+                              {app.uxScores.memberlogin < 60 && (
+                                <div className="border-l-4 border-blue-500 pl-4">
+                                  <h5 className="text-lg font-medium text-gray-900 mb-2">會員登入體驗</h5>
+                                  <div className="space-y-2">
+                                    <div className="flex items-start gap-2">
+                                      <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 text-sm">1</span>
+                                      <p className="text-sm text-gray-600">優化會員登入流程：支援第三方帳號登入（如Google, Apple），並提供忘記密碼的便捷入口</p>
+                                    </div>
+                                    <div className="flex items-start gap-2">
+                                      <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 text-sm">2</span>
+                                      <p className="text-sm text-gray-600">增加商品的多角度圖片與影片展示，提供更詳細的商品描述和用戶評價</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {app.uxScores.checkout < 60 && (
+                                <div className="border-l-4 border-green-500 pl-4">
+                                  <h5 className="text-lg font-medium text-gray-900 mb-2">結帳流程優化</h5>
+                                  <div className="space-y-2">
+                                    <div className="flex items-start gap-2">
+                                      <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-green-100 text-green-600 text-sm">1</span>
+                                      <p className="text-sm text-gray-600">簡化結帳步驟：提供多種支付方式，確保支付安全性，並提供清晰的訂單追蹤資訊</p>
+                                    </div>
+                                    <div className="flex items-start gap-2">
+                                      <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-green-100 text-green-600 text-sm">2</span>
+                                      <p className="text-sm text-gray-600">提升APP穩定性：投入資源修復BUG，加強測試，確保購物車和訂單資訊的可靠性</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {app.uxScores.search < 60 && (
+                                <div className="border-l-4 border-purple-500 pl-4">
+                                  <h5 className="text-lg font-medium text-gray-900 mb-2">搜尋功能改進</h5>
+                                  <div className="space-y-2">
+                                    <div className="flex items-start gap-2">
+                                      <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-purple-100 text-purple-600 text-sm">1</span>
+                                      <p className="text-sm text-gray-600">優化搜尋演算法：提升搜尋結果的準確性，確保用戶能找到最相關的商品</p>
+                                    </div>
+                                    <div className="flex items-start gap-2">
+                                      <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-full bg-purple-100 text-purple-600 text-sm">2</span>
+                                      <p className="text-sm text-gray-600">加入自動完成和搜尋建議功能，幫助用戶更快速找到想要的商品</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="mt-6 p-4 bg-gray-100 rounded-lg">
+                                <h6 className="font-medium text-gray-900 mb-2">預期改善效果</h6>
+                                <ul className="space-y-2 text-sm text-gray-600">
+                                  <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    提升會員登入和商品相關功能的用戶體驗
+                                  </li>
+                                  <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    降低購物流程中的放棄率，增加訂單完成量
+                                  </li>
+                                  <li className="flex items-center gap-2">
+                                    <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    改善APP穩定性和購物車可靠性的負面評價
+                                  </li>
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </CardContent>
+              </Card>
             </TabsContent>
           </Tabs>
         </CardContent>
